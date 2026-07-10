@@ -60,22 +60,23 @@ def is_weekend_local(dt_local):
 def next_open_datetime(tzname, open_time):
     tzloc = pytz.timezone(tzname)
     today_local = datetime.now(tzloc).date()
-    # find next weekday that is Mon-Fri
     candidate = today_local
     while True:
-        # if candidate is weekday
         if candidate.weekday() < 5:
             return tzloc.localize(datetime.combine(candidate, open_time))
         candidate = candidate + timedelta(days=1)
 
 def format_timedelta(td):
-    # return HH:MM
+    # return "Xh Ymin" (no leading zeros)
+    if td is None:
+        return ""
+    # normalize negative to positive
     if td.total_seconds() < 0:
         td = -td
     total_seconds = int(td.total_seconds())
     hrs = total_seconds // 3600
     mins = (total_seconds % 3600) // 60
-    return f"{hrs:02d}:{mins:02d}"
+    return f"{hrs}h {mins}min"
 
 def get_exchange_rows():
     rows = []
@@ -84,11 +85,8 @@ def get_exchange_rows():
         tzloc = pytz.timezone(tzname)
         now_local = datetime.now(tzloc)
         today = now_local.date()
-        # if weekend -> closed
         if is_weekend_local(now_local):
-            # next open will be next Monday or next weekday
             next_open = next_open_datetime(tzname, ex["open"])
-            # compute relative to Bratislava
             next_open_bratislava = next_open.astimezone(BRATISLAVA_TZ)
             diff = next_open_bratislava - datetime.now(BRATISLAVA_TZ)
             status = "closed"
@@ -98,18 +96,14 @@ def get_exchange_rows():
             open_dt = local_dt_for_day(tzname, today, ex["open"])
             close_dt = local_dt_for_day(tzname, today, ex["close"])
             if open_dt <= now_local <= close_dt:
-                # open
                 opened_since = now_local - open_dt
                 display_time = f"Open {format_timedelta(opened_since)}"
                 status = "open"
                 color = "green"
             else:
-                # closed today -> next open is next business day (maybe tomorrow)
-                # if now before open today, next open is today at open
                 if now_local < open_dt:
                     next_open = open_dt
                 else:
-                    # after close -> find next day that's weekday
                     nxt = today + timedelta(days=1)
                     while nxt.weekday() >= 5:
                         nxt += timedelta(days=1)
@@ -119,7 +113,6 @@ def get_exchange_rows():
                 display_time = f"Opens in {format_timedelta(diff)}"
                 status = "closed"
                 color = "red"
-        # compute local time string
         local_now_for_display = datetime.now(tzloc).strftime("%H:%M")
         rows.append({
             "Burza": ex["name"],
@@ -139,9 +132,7 @@ exchange_rows = get_exchange_rows()
 
 # Build HTML table for exchanges
 def render_table(rows, columns, compact=True):
-    # rows: list of dicts, columns: list of column names to display
     html = '<table class="compact-table">'
-    # header
     html += "<tr>"
     for c in columns:
         html += f"<th>{c}</th>"
@@ -160,11 +151,10 @@ def render_table(rows, columns, compact=True):
 cols_ex = ["Burza", "Mesto", "Stat", "Miestny cas", "Stav"]
 st.markdown(render_table(exchange_rows, cols_ex), unsafe_allow_html=True)
 
-st.write("")  # spacer minimal
+st.write("")
 
 # --- Holdings management in session state ---
 if "holdings" not in st.session_state:
-    # holdings: list of dicts: ticker, name, price, quantity, currency, last_update, dividendRate, dividendYield, exDividendDate
     st.session_state.holdings = []
 
 @st.cache_data(ttl=60)
@@ -176,19 +166,15 @@ def fetch_ticker_info(ticker):
         data = tk.info
     except Exception:
         data = {}
-    # safe extract
     name = data.get("shortName") or data.get("longName") or ticker
     price = data.get("regularMarketPrice")
     currency = data.get("currency", "")
-    # dividend fields
     dividendRate = data.get("dividendRate") or data.get("trailingAnnualDividendRate")
     dividendYield = data.get("dividendYield")
-    exDividendDate = data.get("exDividendDate")  # sometimes epoch seconds
-    # Normalize exDividendDate to datetime.date if present
+    exDividendDate = data.get("exDividendDate")
     ex_date = None
     if exDividendDate:
         try:
-            # Some APIs return int epoch in seconds
             ex_date = datetime.fromtimestamp(int(exDividendDate)).date()
         except Exception:
             ex_date = None
@@ -228,13 +214,18 @@ if add_button:
             "dividendYield": info["dividendYield"],
             "exDividendDate": info["exDividendDate"]
         })
-        # clear inputs
-        st.experimental_rerun()
+        # pokus o rerun, ale necháme to bezpečne (ak st.experimental_rerun nie je dostupné, pokračujeme)
+        try:
+            st.experimental_rerun()
+        except Exception:
+            # fallback: lenient behavior - zobrazíme potvrdenie a vyčistíme inputy
+            st.success(f"Pridané: {t}")
+            st.session_state["input_ticker"] = ""
+            st.session_state["input_qty"] = 0.0
 
 # Section 2: held stocks
 st.markdown('<div class="small-note">Držené akcie</div>', unsafe_allow_html=True)
 
-# Editable table: show each holding with a number_input for quantity
 if len(st.session_state.holdings) == 0:
     st.info("Žiadne držené akcie. Pridaj cez formulár vyššie.")
 else:
@@ -251,62 +242,49 @@ else:
         except Exception:
             pass
 
-    # Show compact table with inline quantity editing
-    def render_holdings_editable(holdings):
-        html = '<table class="compact-table">'
-        html += "<tr><th>Ticker</th><th>Meno Firmy</th><th>Aktuálna cena</th><th>Množstvo vlastnených akcií</th></tr>"
-        html += "</table>"
-        return html
-
-    # Use columns to align simple UI: left table summary, right editable fields
-    # We'll render the table header then for each row provide inputs
     st.markdown('<table class="compact-table"><tr><th>Ticker</th><th>Meno Firmy</th><th>Aktuálna cena</th><th>Množstvo vlastnených akcií</th></tr></table>', unsafe_allow_html=True)
-    cols = st.columns([1,4,2,2])
-    # Build rows
-    qty_keys = []
     for i, h in enumerate(st.session_state.holdings):
         ticker = h["ticker"]
         name = h.get("name", "")
         price = h.get("price")
         currency = h.get("currency", "")
         display_price = f"{price} {currency}" if price is not None else f"- {currency}"
-        # create a container row aligned with CSS by writing raw HTML small for first three columns then st.number_input for qty
         rcols = st.columns([1,4,2,2])
         rcols[0].markdown(f"<div style='padding:6px 8px'>{ticker}</div>", unsafe_allow_html=True)
         rcols[1].markdown(f"<div style='padding:6px 8px'>{name}</div>", unsafe_allow_html=True)
         rcols[2].markdown(f"<div style='padding:6px 8px'>{display_price}</div>", unsafe_allow_html=True)
         key = f"qty_{i}_{ticker}"
-        qty_keys.append(key)
         new_q = rcols[3].number_input("", min_value=0.0, value=float(h.get("quantity", 0.0)), step=1.0, format="%.0f", key=key)
-        # allowance to delete
         if rcols[3].button("Vymazať", key=f"del_{i}"):
             st.session_state.holdings.pop(i)
-            st.experimental_rerun()
+            try:
+                st.experimental_rerun()
+            except Exception:
+                pass
 
     if st.button("Uložiť množstvá"):
-        # update quantities from keys
         for i in range(len(st.session_state.holdings)):
             k = f"qty_{i}_{st.session_state.holdings[i]['ticker']}"
             if k in st.session_state:
                 st.session_state.holdings[i]["quantity"] = float(st.session_state[k])
         st.success("Uložené")
-        st.experimental_rerun()
+        try:
+            st.experimental_rerun()
+        except Exception:
+            pass
 
 # Section 3: upcoming ex-dividend dates
 st.markdown('<div class="small-note">Najbližšie Ex-Dividend dátumy (pre moje akcie)</div>', unsafe_allow_html=True)
 
-# Build list of holdings with ex-div info
 ex_rows = []
 for h in st.session_state.holdings:
     ex_date = h.get("exDividendDate")
     if ex_date:
-        # compute values
         qty = h.get("quantity", 0)
         price = h.get("price")
         div_per_share = h.get("dividendRate")
         div_yield = h.get("dividendYield")
         currency = h.get("currency", "")
-        # Use fallbacks
         if div_per_share is None and div_yield and price:
             try:
                 div_per_share = float(div_yield) * float(price)
@@ -331,13 +309,11 @@ for h in st.session_state.holdings:
             "Ocakavany vynos pre moje akcie": expected
         })
 
-# sort by date
 ex_rows = sorted(ex_rows, key=lambda r: datetime.strptime(r["Ex Div Date"], "%d/%m/%y") if r else datetime.max)
 
 if len(ex_rows) == 0:
     st.info("Žiadne nadchádzajúce ex-dividend dátumy pre tvoje akcie.")
 else:
-    # render as compact HTML table
     cols_exdiv = ["Ticker","Meno","Mnozstvo","Ex Div Date","Ohlasena dividenda na akciu","% Ohlasena dividenda k aktualnej cene akcie","% Rocnej dividendy","Ocakavany vynos pre moje akcie"]
     html = '<table class="compact-table"><tr>'
     for c in cols_exdiv:
@@ -351,6 +327,5 @@ else:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-# Footer minimal
 st.write("")
 st.markdown('<div style="font-size:11px;color:#999">Poznámka: údaje sú načítané cez yfinance. Časy burz sú orientačné (bez zohľadnenia špeciálnych dní a sviatkov).</div>', unsafe_allow_html=True)
