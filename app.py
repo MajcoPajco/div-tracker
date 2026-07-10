@@ -19,7 +19,22 @@ input[placeholder="Množstvo"] { max-width:190px !important; width:190px !import
 </style>
 """, unsafe_allow_html=True)
 
-# Exchanges
+# Exchanges mapping for suffix fallback and common names -> (symbol, city, country)
+SUFFIX_MAP = {
+    "L": ("LSE","London","UK"),
+    "PA": ("Euronext (Paris)","Paris","France"),
+    "DE": ("XETRA (Frankfurt)","Frankfurt","Germany"),
+    "F": ("XETRA (Frankfurt)","Frankfurt","Germany"),
+    "HK": ("HKEX","Hong Kong","Hong Kong"),
+    "SS": ("SSE (Shanghai)","Shanghai","China"),
+    "SZ": ("SSE (Shenzhen)","Shenzhen","China"),
+    "TO": ("TSX","Toronto","Canada"),
+    "T": ("TSE (Tokyo)","Tokyo","Japan"),
+    "AX": ("ASX","Sydney","Australia"),
+    "KS": ("KRX","Seoul","South Korea"),
+    "SI": ("SIX","Zurich","Switzerland")
+}
+
 EXCHANGES = [
     {"name":"NYSE","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
     {"name":"NASDAQ","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
@@ -77,7 +92,6 @@ def get_exchange_rows():
         rows.append({"Burza": ex["name"], "Mesto": ex["city"], "Stat": ex["country"], "Miestny cas": local_now, "Stav": display, "color": color})
     return rows
 
-# Header
 st.markdown('<div class="main-title">Dividend tracker</div>', unsafe_allow_html=True)
 
 # Exchanges table
@@ -94,7 +108,7 @@ st.write("")
 if "holdings" not in st.session_state:
     st.session_state.holdings = []
 
-# Messages
+# messages
 if "add_error" not in st.session_state:
     st.session_state.add_error = ""
 if "add_success" not in st.session_state:
@@ -109,7 +123,7 @@ def fetch_ticker_info(ticker):
         info = tk.info or {}
     except:
         info = {}
-    # validate by market price/history
+    # validity check
     valid = False
     try:
         hist = tk.history(period="1d")
@@ -120,6 +134,7 @@ def fetch_ticker_info(ticker):
     price = info.get("regularMarketPrice")
     if price is not None:
         valid = True
+    # exDividendDate
     exDate = info.get("exDividendDate")
     ex_dt = None
     if exDate:
@@ -127,6 +142,10 @@ def fetch_ticker_info(ticker):
             ex_dt = datetime.fromtimestamp(int(exDate)).date()
         except:
             ex_dt = None
+    # exchange info
+    exch = info.get("exchange") or info.get("exchangeShortName") or info.get("market")
+    country = info.get("country")
+    exch_symbol = exch if exch else None
     return {
         "ticker": ticker,
         "name": info.get("shortName") or info.get("longName") or ticker,
@@ -136,10 +155,52 @@ def fetch_ticker_info(ticker):
         "dividendYield": info.get("dividendYield"),
         "exDividendDate": ex_dt,
         "dividends_series": (tk.dividends if hasattr(tk, "dividends") else None),
-        "valid": valid
+        "valid": valid,
+        "exchange": exch_symbol,
+        "country": country
     }
 
-# Add handler (Enter in Množstvo triggers)
+def infer_exchange_info(ticker, info):
+    # prefer explicit info from yfinance
+    exch = info.get("exchange")
+    country = info.get("country")
+    if exch:
+        ex_l = exch.lower()
+        if "nasdaq" in ex_l or "nms" in ex_l:
+            return ("NASDAQ","New York","USA")
+        if "nyse" in ex_l or "new york" in ex_l:
+            return ("NYSE","New York","USA")
+        if "lse" in ex_l or "london" in ex_l:
+            return ("LSE","London","UK")
+        if "paris" in ex_l or "euronext" in ex_l:
+            return ("Euronext (Paris)","Paris","France")
+        if "xetra" in ex_l or "frankfurt" in ex_l or "de" in ex_l:
+            return ("XETRA (Frankfurt)","Frankfurt","Germany")
+        if "hkex" in ex_l or "hong kong" in ex_l:
+            return ("HKEX","Hong Kong","Hong Kong")
+        if "jpx" in ex_l or "tse" in ex_l or "tokyo" in ex_l:
+            return ("TSE (Tokyo)","Tokyo","Japan")
+        # fallback using country if present
+        if country:
+            return (exch if exch else "-", "-", country)
+    # fallback: use ticker suffix
+    if "." in ticker:
+        suf = ticker.split(".")[-1].upper()
+        if suf in SUFFIX_MAP:
+            return SUFFIX_MAP[suf]
+    # unknown
+    return ("","", "")
+
+def format_qty(q):
+    try:
+        qf = float(q)
+    except:
+        return str(q)
+    s = f"{qf:.4f}"
+    s = s.rstrip('0').rstrip('.')
+    return s
+
+# add handler (enter in Množstvo)
 def handle_add():
     t = st.session_state.get("add_ticker","").strip().upper()
     raw_qty = st.session_state.get("add_qty","").strip()
@@ -158,10 +219,12 @@ def handle_add():
         st.session_state["add_ticker"] = ""
         st.session_state["add_qty"] = ""
         return
+    # merge or append
     found = False
     for h in st.session_state.holdings:
         if h["ticker"] == info["ticker"]:
             h["quantity"] = float(h.get("quantity",0.0)) + float(qty)
+            # update meta
             h["name"] = info.get("name") or h.get("name")
             h["price"] = info.get("price") or h.get("price")
             h["currency"] = info.get("currency") or h.get("currency")
@@ -172,9 +235,13 @@ def handle_add():
             found = True
             break
     if not found:
+        exch_sym, exch_city, exch_country = infer_exchange_info(t, info)
         st.session_state.holdings.append({
             "ticker": info["ticker"],
             "name": info["name"],
+            "exchange": exch_sym,
+            "exchange_city": exch_city,
+            "exchange_country": exch_country,
             "price": info["price"],
             "currency": info["currency"],
             "quantity": float(qty),
@@ -185,7 +252,14 @@ def handle_add():
             "next_div": None,
             "auto_declared": False
         })
-    st.session_state.add_success = f"Pridané: {t} ({qty})"
+    # if merged, ensure exchange info present/updated
+    for h in st.session_state.holdings:
+        if h["ticker"] == t and ("exchange" not in h or not h.get("exchange")):
+            exch_sym, exch_city, exch_country = infer_exchange_info(t, info)
+            h["exchange"] = exch_sym
+            h["exchange_city"] = exch_city
+            h["exchange_country"] = exch_country
+    st.session_state.add_success = f"Pridané: {t} ({format_qty(qty)})"
     st.session_state["add_ticker"] = ""
     st.session_state["add_qty"] = ""
     try:
@@ -193,19 +267,16 @@ def handle_add():
     except:
         pass
 
-# Layout: left block for add, right block empty
+# layout: left add inputs only
 left_col, right_col = st.columns([0.5, 0.5])
-
 with left_col:
-    add_row_cols = st.columns([0.3, 0.3, 0.4])
+    add_row_cols = st.columns([0.3,0.3,0.4])
     with add_row_cols[0]:
         st.text_input("", placeholder="Ticker", key="add_ticker", max_chars=10)
     with add_row_cols[1]:
         st.text_input("", placeholder="Množstvo", key="add_qty", max_chars=10, on_change=handle_add)
     with add_row_cols[2]:
         st.write("")
-
-    # messages
     if st.session_state.add_error:
         st.error(st.session_state.add_error)
     if st.session_state.add_success:
@@ -215,7 +286,7 @@ with left_col:
 with right_col:
     st.write("")
 
-# Refresh metadata for holdings (keeps auto-declare logic)
+# refresh metadata and set exchange info where possible
 today = datetime.now().date()
 for i,h in enumerate(st.session_state.holdings):
     try:
@@ -233,7 +304,13 @@ for i,h in enumerate(st.session_state.holdings):
         else:
             if exinfo:
                 st.session_state.holdings[i]["exDividendDate"] = exinfo
-        # infer simple next div
+        # ensure exchange info
+        exch_sym, exch_city, exch_country = infer_exchange_info(h["ticker"], info)
+        if exch_sym:
+            st.session_state.holdings[i]["exchange"] = exch_sym
+            st.session_state.holdings[i]["exchange_city"] = exch_city
+            st.session_state.holdings[i]["exchange_country"] = exch_country
+        # infer next div simple
         try:
             divs = info.get("dividends_series")
             if divs is not None and len(divs) > 0:
@@ -249,14 +326,18 @@ for i,h in enumerate(st.session_state.holdings):
     except:
         pass
 
-# HOLDINGS - render compact HTML table (one row per ticker, no extra gaps)
-holdings_html = '<table class="compact-table"><tr><th>Ticker</th><th>Meno</th><th>Akt.Cena</th><th>Roc.Div[%]</th><th>Množstvo</th></tr>'
+# Build holdings HTML table: Ticker | Meno | Exchange | Mesto | Stat | Akt.Cena | Roc.Div[%] | Mnozstvo
+hdr_cols = ["Ticker","Meno","Burza","Mesto","Štát","Akt.Cena","Roc.Div[%]","Množstvo"]
+holdings_html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in hdr_cols) + '</tr>'
 for h in st.session_state.holdings:
     ticker = h["ticker"]
     name = h.get("name","")
+    exch = h.get("exchange","") or ""
+    exch_city = h.get("exchange_city","") or ""
+    exch_country = h.get("exchange_country","") or ""
     price = h.get("price")
     currency = h.get("currency","")
-    # compute annual dividend and percent
+    # compute annual dividend percent
     annual_div = h.get("dividendRate")
     if annual_div is None and h.get("dividendYield") and price:
         try:
@@ -270,12 +351,21 @@ for h in st.session_state.holdings:
         except:
             annual_pct = "-"
     price_disp = f"{price} {currency}" if price is not None else f"- {currency}"
-    qty_disp = f"{h.get('quantity',0)}"
-    holdings_html += f"<tr><td>{ticker}</td><td>{name}</td><td>{price_disp}</td><td>{annual_pct}</td><td>{qty_disp}</td></tr>"
+    qty_disp = format_qty(h.get("quantity",0))
+    holdings_html += "<tr>"
+    holdings_html += f"<td>{ticker}</td>"
+    holdings_html += f"<td>{name}</td>"
+    holdings_html += f"<td>{exch}</td>"
+    holdings_html += f"<td>{exch_city}</td>"
+    holdings_html += f"<td>{exch_country}</td>"
+    holdings_html += f"<td>{price_disp}</td>"
+    holdings_html += f"<td>{annual_pct}</td>"
+    holdings_html += f"<td>{qty_disp}</td>"
+    holdings_html += "</tr>"
 holdings_html += "</table>"
 st.markdown(holdings_html, unsafe_allow_html=True)
 
-# Ex-Dividend table (unchanged behaviour)
+# Ex-Dividend table (same behavior as before)
 def parse_date_safe(s):
     try:
         return datetime.strptime(s, "%d/%m/%y")
@@ -343,4 +433,4 @@ else:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-st.markdown('<div style="font-size:11px;color:#999">Poznámka: Držené akcie sú zobrazené kompaktne v tabuľke; pridať akciu cez pole "Množstvo" (stlačenie Enter).</div>', unsafe_allow_html=True)
+st.markdown('<div style="font-size:11px;color:#999">Poznámka: Burzu a miesto sa pokúšame zistiť z yfinance; ak chýba, použije sa dovetok tickera (napr. .L → London).</div>', unsafe_allow_html=True)
