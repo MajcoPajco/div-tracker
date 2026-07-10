@@ -1,0 +1,20 @@
+[
+  {
+    "ticker": "MA",
+    "quantity": 2.45,
+    "declared": false,
+    "next_div": null
+  },
+  {
+    "ticker": "V",
+    "quantity": 3.55,
+    "declared": false,
+    "next_div": null
+  },
+  {
+    "ticker": "GIS",
+    "quantity": 2.1,
+    "declared": false,
+    "next_div": null
+  }
+]
