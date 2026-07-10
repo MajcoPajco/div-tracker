@@ -1,7 +1,7 @@
 import streamlit as st
 import datetime
 import pytz
-import textwrap
+import textwrap # Stále ho necháme, aj keď ho priamo nepoužijeme na final_html_table, môže byť užitočný inde.
 
 # --- Konfigurácia Streamlit stránky ---
 st.set_page_config(
@@ -23,7 +23,7 @@ EXCHANGES = [
     {"name": "TSE (Tokio)", "city": "Tokio", "country": "Japonsko", "timezone_str": "Asia/Tokyo", "open_h": 9, "open_m": 0, "close_h": 15, "close_m": 0},
     {"name": "SSE (Šanghaj)", "city": "Šanghaj", "country": "Čína", "timezone_str": "Asia/Shanghai", "open_h": 9, "open_m": 30, "close_h": 15, "close_m": 0},
     {"name": "ASX (Sydney)", "city": "Sydney", "country": "Austrália", "timezone_str": "Australia/Sydney", "open_h": 10, "open_m": 0, "close_h": 16, "close_m": 0},
-    {"name": "TSX (Toronto)", "city": "Toronto", "country": "Kanada", "timezone_str": "America/Toronto", "open_h": 9, "open_m": 30, "close_h": 16, "close_m": 0}, # <-- Opravený riadok
+    {"name": "TSX (Toronto)", "city": "Toronto", "country": "Kanada", "timezone_str": "America/Toronto", "open_h": 9, "open_m": 30, "close_h": 16, "close_m": 0},
     {"name": "BSE (Bombaj)", "city": "Bombaj", "country": "India", "timezone_str": "Asia/Kolkata", "open_h": 9, "open_m": 15, "close_h": 15, "close_m": 30},
 ]
 
@@ -150,88 +150,89 @@ for exchange_data in EXCHANGES:
 st.markdown(f"<p style='font-size:1.2em; font-weight:bold; color:{top_banner_color}; margin-bottom: 0.5rem;'>{top_banner_message}</p>", unsafe_allow_html=True)
 
 # --- Vlastné CSS pre tabuľku a kompaktnosť ---
-st.markdown("""
-<style>
-    /* Všeobecné nastavenia pre Streamlit app */
-    .stApp {
-        padding-top: 1rem;
-        padding-right: 1rem;
-        padding-left: 1rem;
-        padding-bottom: 1rem;
-    }
-    /* Menší a kompaktnejší nadpis */
-    h3 {
-        margin-top: 0.5rem;
-        margin-bottom: 0.5rem;
-        font-size: 1.5em; /* Prispôsob veľkosť podľa potreby */
-    }
+# Použijeme textwrap.dedent aj tu, aby sme si boli istí, že CSS je správne naformátované
+st.markdown(textwrap.dedent("""
+    <style>
+        /* Všeobecné nastavenia pre Streamlit app */
+        .stApp {
+            padding-top: 1rem;
+            padding-right: 1rem;
+            padding-left: 1rem;
+            padding-bottom: 1rem;
+        }
+        /* Menší a kompaktnejší nadpis */
+        h3 {
+            margin-top: 0.5rem;
+            margin-bottom: 0.5rem;
+            font-size: 1.5em; /* Prispôsob veľkosť podľa potreby */
+        }
 
-    /* Štýly pre kompaktnú tabuľku */
-    .compact-table {
-        width: 100%;
-        border-collapse: collapse; /* Odstráni medzery medzi bunkami */
-        font-family: monospace; /* Pre pocit "odletovej tabule" */
-        font-size: 0.9em;
-    }
-    .compact-table th, .compact-table td {
-        padding: 2px 5px; /* Minimálne odsadenie */
-        border: none; /* Bez okrajov */
-        text-align: left;
-        white-space: nowrap; /* Zabráni zalomeniu textu */
-    }
-    .compact-table tr {
-        line-height: 1.2; /* Kompaktná výška riadku */
-    }
-    .compact-table thead {
-        background-color: #f0f2f6; /* Svetlo sivá hlavička */
-    }
-    .compact-table .red-text { color: red; }
-    .compact-table .green-text { color: green; }
-    
-    /* Sekcia s bielym pozadím pre tabuľku */
-    .white-background-section {
-        background-color: white;
-        padding: 10px; /* Trochu odsadenia okolo tabuľky */
-        border-radius: 5px;
-    }
-</style>
-""", unsafe_allow_html=True)
+        /* Štýly pre kompaktnú tabuľku */
+        .compact-table {
+            width: 100%;
+            border-collapse: collapse; /* Odstráni medzery medzi bunkami */
+            font-family: monospace; /* Pre pocit "odletovej tabule" */
+            font-size: 0.9em;
+        }
+        .compact-table th, .compact-table td {
+            padding: 2px 5px; /* Minimálne odsadenie */
+            border: none; /* Bez okrajov */
+            text-align: left;
+            white-space: nowrap; /* Zabráni zalomeniu textu */
+        }
+        .compact-table tr {
+            line-height: 1.2; /* Kompaktná výška riadku */
+        }
+        .compact-table thead {
+            background-color: #f0f2f6; /* Svetlo sivá hlavička */
+        }
+        .compact-table .red-text { color: red; }
+        .compact-table .green-text { color: green; }
+        
+        /* Sekcia s bielym pozadím pre tabuľku */
+        .white-background-section {
+            background-color: white;
+            padding: 10px; /* Trochu odsadenia okolo tabuľky */
+            border-radius: 5px;
+        }
+    </style>
+    """), unsafe_allow_html=True)
 
 # --- Generovanie tabuľky ---
-# Použijeme zoznam na skladanie HTML častí a potom textwrap.dedent
-html_table_parts = []
-html_table_parts.append("""
-<div class="white-background-section">
-<table class="compact-table">
-    <thead>
-        <tr>
-            <th>Burza</th>
-            <th>Mesto</th>
-            <th>Štát</th>
-            <th>Miestny čas</th>
-            <th>Stav</th>
-        </tr>
-    </thead>
-    <tbody>
-""")
+# Použijeme zoznam riadkov a potom ich spojíme, aby sme mali plnú kontrolu nad odsadením.
+html_lines = []
+
+html_lines.append('<div class="white-background-section">')
+html_lines.append('<table class="compact-table">')
+html_lines.append('    <thead>')
+html_lines.append('        <tr>')
+html_lines.append('            <th>Burza</th>')
+html_lines.append('            <th>Mesto</th>')
+html_lines.append('            <th>Štát</th>')
+html_lines.append('            <th>Miestny čas</th>')
+html_lines.append('            <th>Stav</th>')
+html_lines.append('        </tr>')
+html_lines.append('    </thead>')
+html_lines.append('    <tbody>')
 
 for exchange_data in EXCHANGES:
     local_time_str, status_str, color_class = get_exchange_status(exchange_data, current_utc_time)
-    html_table_parts.append(f"""
-        <tr>
-            <td class="{color_class}">{exchange_data['name']}</td>
-            <td class="{color_class}">{exchange_data['city']}</td>
-            <td class="{color_class}">{exchange_data['country']}</td>
-            <td class="{color_class}">{local_time_str}</td>
-            <td class="{color_class}">{status_str}</td>
-        </tr>
-    """)
-html_table_parts.append("""
-    </tbody>
-</table>
-</div>
-""")
+    # Každý riadok HTML je explicitne definovaný s odsadením, ktoré chceme
+    html_lines.append(f'        <tr>')
+    html_lines.append(f'            <td class="{color_class}">{exchange_data["name"]}</td>')
+    html_lines.append(f'            <td class="{color_class}">{exchange_data["city"]}</td>')
+    html_lines.append(f'            <td class="{color_class}">{exchange_data["country"]}</td>')
+    html_lines.append(f'            <td class="{color_class}">{local_time_str}</td>')
+    html_lines.append(f'            <td class="{color_class}">{status_str}</td>')
+    html_lines.append(f'        </tr>')
 
-# Spojíme všetky časti a odstránime spoločné úvodné odsadenie
-final_html_table = textwrap.dedent("".join(html_table_parts))
+html_lines.append('    </tbody>')
+html_lines.append('</table>')
+html_lines.append('</div>')
+
+# Spojíme všetky riadky do jedného reťazca.
+# Týmto sa zabezpečí, že prvý riadok HTML začína na stĺpci 0, čo zabráni interpretácii ako kódového bloku.
+final_html_table = "
+".join(html_lines)
+
 st.markdown(final_html_table, unsafe_allow_html=True)
