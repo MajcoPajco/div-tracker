@@ -5,32 +5,34 @@ from datetime import datetime, time, timedelta
 
 st.set_page_config(page_title="Dividend tracker", layout="wide")
 
-# CSS kompaktné + zúžené inputy pre konkrétne polia (aria-label = label text)
+# CSS: kompaktné tabuľky + úzke add polia (približne 5cm = ~190px)
 st.markdown("""
 <style>
 .main-title { font-size:12px; font-weight:600; margin-bottom:6px; }
 .compact-table { background: white; border-collapse: collapse; width: 100%; font-size:13px; }
 .compact-table th, .compact-table td { padding:6px 8px; border-bottom: 1px solid #eee; text-align:left; white-space: nowrap; }
 .compact-table tr { height: 28px; }
-/* Zúženie konkrétnych inputov podľa aria-label (label text). */
-input[aria-label="Ticker"] {
-  max-width: 160px !important;
+
+/* cieľame polia podľa placeholderu - tieto sú krátke ~190px (~5cm) */
+input[placeholder="AddTicker"] {
+  max-width: 190px !important;
+  width: 190px !important;
   height: 30px !important;
   padding: 6px 8px !important;
-  font-size: 13px !important;
 }
-input[aria-label="Množstvo"] {
-  max-width: 120px !important;
+input[placeholder="AddQty"] {
+  max-width: 190px !important;
+  width: 190px !important;
   height: 30px !important;
   padding: 6px 8px !important;
-  font-size: 13px !important;
 }
-/* upraviť vertikálne zarovnanie tlačidla v st.form */
-.stButton>button { margin-top: 0.2rem; padding: .375rem .75rem; }
+
+/* zmenšenie tlačidla a zarovnanie do riadku */
+.stButton>button { margin-top: 0.2rem; padding: .35rem .6rem; font-size:13px; }
 </style>
 """, unsafe_allow_html=True)
 
-# Exchanges (konštanty)
+# --- Exchanges (základ) ---
 EXCHANGES = [
     {"name":"NYSE","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
     {"name":"NASDAQ","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
@@ -92,10 +94,10 @@ def get_exchange_rows():
         })
     return rows
 
-# header
+# Header small
 st.markdown('<div class="main-title">Dividend tracker</div>', unsafe_allow_html=True)
 
-# exchanges
+# Exchanges section (top)
 exchange_rows = get_exchange_rows()
 cols_ex = ["Burza","Mesto","Stat","Miestny cas","Stav"]
 html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in cols_ex) + '</tr>'
@@ -105,8 +107,9 @@ html += "</table>"
 st.markdown(html, unsafe_allow_html=True)
 st.write("")
 
-# session holdings
+# --- Session state holdings ---
 if "holdings" not in st.session_state:
+    # holdings: list of dicts with ticker,name,price,currency,quantity,dividendRate,dividendYield,exDividendDate,declared,next_div,auto_declared,_next_div_auto,_freq_label
     st.session_state.holdings = []
 
 @st.cache_data(ttl=300)
@@ -115,11 +118,11 @@ def fetch_ticker_info(ticker):
     tk = yf.Ticker(ticker)
     try:
         info = tk.info or {}
-    except Exception:
+    except:
         info = {}
     try:
         divs = tk.dividends
-    except Exception:
+    except:
         divs = None
     name = info.get("shortName") or info.get("longName") or ticker
     price = info.get("regularMarketPrice")
@@ -137,60 +140,76 @@ def fetch_ticker_info(ticker):
             "dividendRate": dividendRate, "dividendYield": dividendYield,
             "exDividendDate": ex_dt, "dividends_series": divs}
 
-# ADD form (menšie polia + max_chars)
-with st.form("add_form", clear_on_submit=False):
-    # úzke stĺpce tak, aby inputy nezaberali celú šírku
-    c1, c2, c3 = st.columns([0.9, 0.6, 0.25])
-    with c1:
-        # max_chars=10 zabezpečí limit dĺžky
-        new_ticker = st.text_input("Ticker", value="", key="input_ticker_small", max_chars=10)
-    with c2:
-        new_qty_text = st.text_input("Množstvo", value="", key="input_qty_small", max_chars=10, help="Použi bodku alebo čiarku ako desatinný oddeľovač")
-    with c3:
-        add_submitted = st.form_submit_button("Pridať")
-    if add_submitted:
-        t = new_ticker.strip().upper()
-        # ak používateľ zadal čiarku, nahradíme bodkou
-        try:
-            qty = float(new_qty_text.strip().replace(',', '.')) if new_qty_text.strip() != "" else None
-        except:
-            qty = None
-        if t == "" or qty is None or qty <= 0:
-            st.warning("Zadaj platný ticker a množstvo > 0")
-        else:
-            info = fetch_ticker_info(t)
-            found = False
-            for h in st.session_state.holdings:
-                if h["ticker"] == info["ticker"]:
-                    h["quantity"] = float(h.get("quantity", 0.0)) + float(qty)
-                    h["name"] = info.get("name") or h.get("name")
-                    h["price"] = info.get("price") or h.get("price")
-                    h["currency"] = info.get("currency") or h.get("currency")
-                    h["dividendRate"] = info.get("dividendRate")
-                    h["dividendYield"] = info.get("dividendYield")
-                    if info.get("exDividendDate"):
-                        h["exDividendDate"] = info.get("exDividendDate")
-                    found = True
-                    break
-            if not found:
-                st.session_state.holdings.append({
-                    "ticker": info["ticker"],
-                    "name": info["name"],
-                    "price": info["price"],
-                    "currency": info["currency"],
-                    "quantity": float(qty),
-                    "dividendRate": info["dividendRate"],
-                    "dividendYield": info["dividendYield"],
-                    "exDividendDate": info["exDividendDate"],
-                    "declared": False,
-                    "next_div": None,
-                    "auto_declared": False
-                })
-            # vyčisti polia PO stlačení Pridať
-            st.session_state["input_ticker_small"] = ""
-            st.session_state["input_qty_small"] = ""
+# -------------------
+# NEW: Redesigned add section (left-aligned, narrow fields ~5cm, button same row)
+# -------------------
+st.markdown("<div style='margin-top:6px; margin-bottom:6px;'></div>", unsafe_allow_html=True)
 
-# refresh metadata + auto-declared detection (zachované)
+# container row: left part contains two narrow inputs side by side, right part the button
+row_cols = st.columns([0.6, 0.2])  # left area for inputs, small right area for button
+left = row_cols[0]
+right = row_cols[1]
+
+# inside left, make two small columns for the two inputs so they are on the same row and left-aligned
+left_inputs = left.columns([0.5, 0.5])
+
+# Use unique placeholders to target CSS widths above: "AddTicker" and "AddQty"
+# Limit max_chars=10 as requested
+add_ticker = left_inputs[0].text_input(label="", placeholder="AddTicker", key="add_ticker", max_chars=10)
+add_qty = left_inputs[1].text_input(label="", placeholder="AddQty", key="add_qty", max_chars=10)
+
+# Button placed in the right column but vertically aligned with inputs via CSS tweaks above
+if right.button("Pridať"):
+    t = (add_ticker or "").strip().upper()
+    raw_qty = (add_qty or "").strip()
+    # replace comma with dot for decimals
+    try:
+        qty = float(raw_qty.replace(',', '.')) if raw_qty != "" else None
+    except:
+        qty = None
+    if t == "" or qty is None or qty <= 0:
+        st.warning("Zadaj platný ticker a množstvo > 0")
+    else:
+        info = fetch_ticker_info(t)
+        found = False
+        for h in st.session_state.holdings:
+            if h["ticker"] == info["ticker"]:
+                h["quantity"] = float(h.get("quantity", 0.0)) + float(qty)
+                h["name"] = info.get("name") or h.get("name")
+                h["price"] = info.get("price") or h.get("price")
+                h["currency"] = info.get("currency") or h.get("currency")
+                h["dividendRate"] = info.get("dividendRate")
+                h["dividendYield"] = info.get("dividendYield")
+                if info.get("exDividendDate"):
+                    h["exDividendDate"] = info.get("exDividendDate")
+                found = True
+                break
+        if not found:
+            st.session_state.holdings.append({
+                "ticker": info["ticker"],
+                "name": info["name"],
+                "price": info["price"],
+                "currency": info["currency"],
+                "quantity": float(qty),
+                "dividendRate": info["dividendRate"],
+                "dividendYield": info["dividendYield"],
+                "exDividendDate": info["exDividendDate"],
+                "declared": False,
+                "next_div": None,
+                "auto_declared": False
+            })
+        # clear the add fields after successful addition
+        st.session_state["add_ticker"] = ""
+        st.session_state["add_qty"] = ""
+        # rerun to update visible UI immediately
+        try:
+            st.experimental_rerun()
+        except:
+            pass
+
+# -------------------
+# Refresh metadata and auto-declared detection (kept)
+# -------------------
 today = datetime.now().date()
 for i,h in enumerate(st.session_state.holdings):
     try:
@@ -208,17 +227,32 @@ for i,h in enumerate(st.session_state.holdings):
         else:
             if exinfo:
                 st.session_state.holdings[i]["exDividendDate"] = exinfo
-    except Exception:
+        # infer simple _next_div_auto and _freq_label (best-effort) for use in ex table
+        try:
+            divs = info.get("dividends_series")
+            if divs is not None and len(divs) > 0:
+                last_div = float(divs.tail(1).iloc[0])
+                st.session_state.holdings[i]["_next_div_auto"] = last_div
+                st.session_state.holdings[i]["_freq_label"] = "From history"
+            else:
+                st.session_state.holdings[i]["_next_div_auto"] = None
+                st.session_state.holdings[i]["_freq_label"] = "Unknown"
+        except:
+            st.session_state.holdings[i]["_next_div_auto"] = None
+            st.session_state.holdings[i]["_freq_label"] = "Unknown"
+    except:
         pass
 
-# callback na uloženie inline úprav
+# -------------------
+# Callback to save inline edits (quantities, declared, next_div)
+# -------------------
 def save_all():
     for idx, hh in enumerate(st.session_state.holdings):
         qk = f"qty_input_{idx}_{hh['ticker']}"
         dk = f"decl_{idx}_{hh['ticker']}"
         nk = f"nextdiv_{idx}_{hh['ticker']}"
         if qk in st.session_state:
-            raw = st.session_state[qk].strip()
+            raw = str(st.session_state[qk]).strip()
             try:
                 val = float(raw.replace(',', '.'))
                 st.session_state.holdings[idx]["quantity"] = val
@@ -227,7 +261,7 @@ def save_all():
         if dk in st.session_state:
             st.session_state.holdings[idx]["declared"] = bool(st.session_state[dk])
         if nk in st.session_state:
-            rawn = st.session_state[nk].strip()
+            rawn = str(st.session_state[nk]).strip()
             if rawn == "":
                 st.session_state.holdings[idx]["next_div"] = None
             else:
@@ -236,7 +270,9 @@ def save_all():
                 except:
                     pass
 
-# Render holdings v skutočnej tabuľke (zarovnané stĺpce)
+# -------------------
+# Render holdings in aligned table form (one row per ticker)
+# -------------------
 col_widths = [1,5,2,1,1,2,1]
 hdr = st.columns(col_widths)
 hdr[0].markdown("**Ticker**")
@@ -249,9 +285,9 @@ hdr[6].markdown("")
 
 for i, h in enumerate(st.session_state.holdings):
     ticker = h["ticker"]
-    name = h.get("name", "")
+    name = h.get("name","")
     price = h.get("price")
-    currency = h.get("currency", "")
+    currency = h.get("currency","")
     price_display = f"{price} {currency}" if price is not None else f"- {currency}"
     cols = st.columns(col_widths)
     cols[0].markdown(f"<div style='padding:6px 8px'>{ticker}</div>", unsafe_allow_html=True)
@@ -264,77 +300,4 @@ for i, h in enumerate(st.session_state.holdings):
     cols[4].checkbox("", value=bool(h.get("declared", False)), key=dkey, on_change=save_all)
     cols[5].text_input("", value=(str(h.get("next_div")) if h.get("next_div") is not None else ""), key=nkey, on_change=save_all, max_chars=10)
     if cols[6].button("Vymazať", key=f"del_{i}"):
-        st.session_state.holdings.pop(i)
-        try:
-            st.experimental_rerun()
-        except:
-            pass
-
-# Ex-Dividend section (necháme ako predtým)
-def parse_date_safe(s):
-    try:
-        return datetime.strptime(s, "%d/%m/%y")
-    except:
-        return datetime.max
-
-ex_rows = []
-for h in st.session_state.holdings:
-    if not h.get("declared", False):
-        continue
-    ex_date = h.get("exDividendDate")
-    if not ex_date: continue
-    if ex_date <= today: continue
-    qty = h.get("quantity", 0)
-    price = h.get("price")
-    currency = h.get("currency","")
-    annual_div = h.get("dividendRate")
-    if annual_div is None and h.get("dividendYield") and price:
-        try:
-            annual_div = float(h.get("dividendYield")) * float(price)
-        except:
-            annual_div = None
-    annual_pct = "-"
-    if annual_div is not None and price:
-        try:
-            annual_pct = f"{(float(annual_div)/float(price))*100:.2f} %"
-        except:
-            annual_pct = "-"
-    annual_disp = f"{float(annual_div):.4g} {currency}" if annual_div is not None else "-"
-    nasl_val = h.get("next_div")
-    if nasl_val is None and h.get("_next_div_auto") is not None:
-        nasl_val = h.get("_next_div_auto")
-    nasl_disp = f"{float(nasl_val):.4g} {currency}" if nasl_val is not None else "-"
-    nasl_pct = "-"
-    if nasl_val is not None and price:
-        try:
-            nasl_pct = f"{(float(nasl_val)/float(price))*100:.4f} %"
-        except:
-            nasl_pct = "-"
-    freq_label = h.get("_freq_label", "Unknown")
-    act_price = f"{price} {currency}" if price is not None else f"- {currency}"
-    ex_rows.append({
-        "Ticker": h["ticker"],
-        "Meno": h.get("name",""),
-        "Mnozstvo": f"{float(qty):.4g}",
-        "Ex Div Date": ex_date.strftime("%d/%m/%y"),
-        "Roc.Div[%]": annual_pct,
-        "Roc.Div": annual_disp,
-        "Div.Frek": freq_label,
-        "Nasl.Div": nasl_disp,
-        "Nasl.Div[%]": nasl_pct,
-        "Akt.Cena": act_price
-    })
-
-ex_rows = sorted(ex_rows, key=lambda r: parse_date_safe(r["Ex Div Date"]))
-
-if len(ex_rows) == 0:
-    st.info("Žiadne ohlásené (Declared) nasledujúce dividendy pre tvoje akcie.")
-else:
-    cols_exdiv = ["Ticker","Meno","Mnozstvo","Ex Div Date","Roc.Div[%]","Roc.Div","Div.Frek","Nasl.Div","Nasl.Div[%]","Akt.Cena"]
-    html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in cols_exdiv) + '</tr>'
-    for r in ex_rows:
-        html += "<tr>" + ''.join(f"<td>{r.get(c,'')}</td>" for c in cols_exdiv) + "</tr>"
-    html += "</table>"
-    st.markdown(html, unsafe_allow_html=True)
-
-st.markdown('<div style="font-size:11px;color:#999">Poznámka: polia majú limit 10 znakov; tlačidlo Pridať je v rovnakom riadku. Použi bodku alebo čiarku pre desatinné čísla.</div>', unsafe_allow_html=True)
+        st.session_state
