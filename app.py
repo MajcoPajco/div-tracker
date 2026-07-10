@@ -7,11 +7,11 @@ from datetime import datetime, time, timedelta
 
 st.set_page_config(page_title="Dividend tracker", layout="wide")
 
-# Config
+# ----------------- Config -----------------
 HOLDINGS_FILE = Path("holdings.json")
-FETCH_TTL = 60  # seconds cache for yfinance
+FETCH_TTL = 60  # seconds for caching yfinance results (adjust as needed)
 
-# CSS
+# ----------------- CSS -----------------
 st.markdown("""
 <style>
 .main-title { font-size:12px; font-weight:600; margin-bottom:6px; }
@@ -24,20 +24,21 @@ input[placeholder="Množstvo"] { max-width:190px !important; width:190px !import
 </style>
 """, unsafe_allow_html=True)
 
-# Exchanges (restored)
+# ----------------- Exchanges (restored + symbol field) -----------------
 EXCHANGES = [
-    {"symbol":"NYSE","name":"NYSE","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
-    {"symbol":"NASDAQ","name":"NASDAQ","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
-    {"symbol":"LSE","name":"LSE","city":"London","country":"UK","tz":"Europe/London","open":time(8,0),"close":time(16,30)},
-    {"symbol":"ENX","name":"Euronext (Paris)","city":"Paris","country":"France","tz":"Europe/Paris","open":time(9,0),"close":time(17,30)},
-    {"symbol":"XETRA","name":"XETRA (Frankfurt)","city":"Frankfurt","country":"Germany","tz":"Europe/Berlin","open":time(9,0),"close":time(17,30)},
-    {"symbol":"TSE","name":"TSE (Tokyo)","city":"Tokyo","country":"Japan","tz":"Asia/Tokyo","open":time(9,0),"close":time(15,0)},
-    {"symbol":"HKEX","name":"HKEX","city":"Hong Kong","country":"Hong Kong","tz":"Asia/Hong_Kong","open":time(9,30),"close":time(16,0)},
-    {"symbol":"SSE","name":"SSE (Shanghai)","city":"Shanghai","country":"China","tz":"Asia/Shanghai","open":time(9,30),"close":time(15,0)}
+    {"symbol":"NYSE","name": "NYSE", "city": "New York", "country": "USA", "tz": "America/New_York", "open": time(9,30), "close": time(16,0)},
+    {"symbol":"NASDAQ","name": "NASDAQ", "city": "New York", "country": "USA", "tz": "America/New_York", "open": time(9,30), "close": time(16,0)},
+    {"symbol":"LSE","name": "LSE", "city": "London", "country": "UK", "tz": "Europe/London", "open": time(8,0), "close": time(16,30)},
+    {"symbol":"ENX","name": "Euronext (Paris)", "city": "Paris", "country": "France", "tz": "Europe/Paris", "open": time(9,0), "close": time(17,30)},
+    {"symbol":"XETRA","name": "XETRA (Frankfurt)", "city": "Frankfurt", "country": "Germany", "tz": "Europe/Berlin", "open": time(9,0), "close": time(17,30)},
+    {"symbol":"TSE","name": "TSE (Tokyo)", "city": "Tokyo", "country": "Japan", "tz": "Asia/Tokyo", "open": time(9,0), "close": time(15,0)},
+    {"symbol":"HKEX","name": "HKEX", "city": "Hong Kong", "country": "Hong Kong", "tz": "Asia/Hong_Kong", "open": time(9,30), "close": time(16,0)},
+    {"symbol":"SSE","name": "SSE (Shanghai)", "city": "Shanghai", "country": "China", "tz": "Asia/Shanghai", "open": time(9,30), "close": time(15,0)},
 ]
+
 BRATISLAVA_TZ = pytz.timezone("Europe/Bratislava")
 
-# Helpers
+# ----------------- Helpers -----------------
 def format_timedelta(td):
     if td is None:
         return ""
@@ -100,7 +101,7 @@ def get_exchange_rows():
         })
     return rows
 
-# Persistence (only user fields)
+# ----------------- Persistence helpers (persist only user fields) -----------------
 def save_holdings_file():
     try:
         to_save = []
@@ -132,13 +133,17 @@ def load_holdings_file():
             "quantity": item.get("quantity", 0),
             "declared": bool(item.get("declared", False)),
             "next_div": item.get("next_div", None),
-            # runtime-only fields
-            "name": None, "price": None, "currency": None,
-            "dividendRate": None, "dividendYield": None,
-            "exDividendDate": None, "exchange": None,
-            "exchange_city": None, "exchange_country": None,
-            "_next_div_auto": None, "_freq_label": None,
-            "_sum_div_12m": None, "_nasl_div_announced": None,
+            "name": None,
+            "price": None,
+            "currency": None,
+            "dividendRate": None,
+            "dividendYield": None,
+            "exDividendDate": None,
+            "exchange": None,
+            "exchange_city": None,
+            "exchange_country": None,
+            "_next_div_auto": None,
+            "_freq_label": None,
             "auto_declared": False
         })
     return holdings
@@ -152,7 +157,7 @@ def format_qty(q):
     s = s.rstrip('0').rstrip('.')
     return s
 
-# yfinance fetch
+# ----------------- yfinance fetch (runtime fields only) -----------------
 @st.cache_data(ttl=FETCH_TTL)
 def fetch_ticker_info(ticker):
     ticker = ticker.upper()
@@ -179,7 +184,9 @@ def fetch_ticker_info(ticker):
             ex_dt = datetime.fromtimestamp(int(exDate)).date()
         except:
             ex_dt = None
-    # dividends
+    exch = info.get("exchange") or info.get("exchangeShortName") or info.get("market")
+    country = info.get("country")
+    # dividends series
     divs = None
     try:
         divs = tk.dividends
@@ -195,12 +202,13 @@ def fetch_ticker_info(ticker):
         "exDividendDate": ex_dt,
         "dividends_series": divs,
         "valid": valid,
-        "exchange": info.get("exchange") or info.get("exchangeShortName") or info.get("market"),
-        "country": info.get("country"),
+        "exchange": exch,
+        "country": country,
+        # Also return raw info so we can try multiple keys for announced next dividend
         "raw_info": info
     }
 
-# suffix fallback (extendable)
+# suffix map (fallback)
 SUFFIX_MAP = {
     "L": ("LSE","London","UK"),
     "PA": ("Euronext (Paris)","Paris","France"),
@@ -241,50 +249,16 @@ def infer_exchange_info(ticker, info):
             return SUFFIX_MAP[suf]
     return ("", "", "")
 
-# frequency inference
-def infer_frequency_label(divs_series):
-    if divs_series is None or len(divs_series) == 0:
-        return "Unknown"
-    try:
-        cutoff = datetime.now().date() - timedelta(days=365)
-        try:
-            recent = divs_series[divs_series.index.date >= cutoff]
-            count = int(recent.count())
-        except Exception:
-            recent = divs_series[divs_series.index >= cutoff]
-            count = int(recent.count())
-        if count >= 10:
-            return "Monthly"
-        if 3 <= count <= 5:
-            return "Quarterly"
-        if count == 2:
-            return "Semiannual"
-        if count == 1:
-            return "Yearly"
-        total = int(divs_series.tail(8).count())
-        if total >= 8:
-            return "Monthly"
-        if 3 <= total <= 5:
-            return "Quarterly"
-        if total == 2:
-            return "Semiannual"
-        if total == 1:
-            return "Yearly"
-        return "Irregular"
-    except:
-        return "Unknown"
-
-# Init session - load holdings if file exists (robust)
-if "holdings" not in st.session_state or (isinstance(st.session_state.get("holdings"), list) and len(st.session_state.get("holdings")) == 0):
-    loaded = load_holdings_file()
-    st.session_state.holdings = loaded if loaded else []
+# ----------------- Init session -----------------
+if "holdings" not in st.session_state:
+    st.session_state.holdings = load_holdings_file()
 
 if "add_error" not in st.session_state:
     st.session_state.add_error = ""
 if "add_success" not in st.session_state:
     st.session_state.add_success = ""
 
-# Add handler
+# ----------------- Add handler -----------------
 def handle_add():
     t = st.session_state.get("add_ticker","").strip().upper()
     raw_qty = st.session_state.get("add_qty","").strip()
@@ -303,7 +277,6 @@ def handle_add():
         st.session_state["add_ticker"] = ""
         st.session_state["add_qty"] = ""
         return
-    # merge or add in session_state
     found = False
     for h in st.session_state.holdings:
         if h["ticker"] == info["ticker"]:
@@ -312,21 +285,24 @@ def handle_add():
             break
     if not found:
         exch_sym, exch_city, exch_country = infer_exchange_info(t, info)
-        new_h = {
+        st.session_state.holdings.append({
             "ticker": info["ticker"],
             "quantity": float(qty),
             "declared": False,
             "next_div": None,
-            "name": None, "price": None, "currency": None,
-            "dividendRate": None, "dividendYield": None,
-            "exDividendDate": None, "exchange": exch_sym,
-            "exchange_city": exch_city, "exchange_country": exch_country,
-            "_next_div_auto": None, "_freq_label": None,
-            "_sum_div_12m": None, "_nasl_div_announced": None,
+            "name": None,
+            "price": None,
+            "currency": None,
+            "dividendRate": None,
+            "dividendYield": None,
+            "exDividendDate": None,
+            "exchange": exch_sym,
+            "exchange_city": exch_city,
+            "exchange_country": exch_country,
+            "_next_div_auto": None,
+            "_freq_label": None,
             "auto_declared": False
-        }
-        st.session_state.holdings.append(new_h)
-    # persist user fields
+        })
     save_holdings_file()
     st.session_state.add_success = f"Pridané: {t} ({format_qty(qty)})"
     st.session_state["add_ticker"] = ""
@@ -336,10 +312,12 @@ def handle_add():
     except:
         pass
 
-# Layout: exchanges
+# ----------------- Layout: show restored exchanges table (with Znacka) -----------------
 st.markdown('<div class="main-title">Dividend tracker</div>', unsafe_allow_html=True)
+
 exchange_rows = get_exchange_rows()
 cols_ex = ["Burza","Znacka","Mesto","Stat","Miestny cas","Stav"]
+
 rows_render = []
 for r in exchange_rows:
     rows_render.append({
@@ -351,18 +329,28 @@ for r in exchange_rows:
         "Stav": r.get("Stav",""),
         "color": r.get("color","black")
     })
+
 def render_table(rows, columns):
-    html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in columns) + '</tr>'
+    html = '<table class="compact-table"><tr>'
+    for c in columns:
+        html += f"<th>{c}</th>"
+    html += "</tr>"
     for r in rows:
-        color = r.get("color","black")
-        html += f"<tr style='color:{color};'>" + ''.join(f"<td>{r.get(c,'')}</td>" for c in columns) + "</tr>"
+        color = r.get("color", "black")
+        row_color = f"color:{color};"
+        html += f"<tr style='{row_color}'>"
+        for c in columns:
+            val = r.get(c, "")
+            html += f"<td>{val}</td>"
+        html += "</tr>"
     html += "</table>"
     return html
+
 st.markdown(render_table(rows_render, cols_ex), unsafe_allow_html=True)
 st.write("")
 
-# Add inputs (left)
-left_col, right_col = st.columns([0.5,0.5])
+# ----------------- Add inputs (left) -----------------
+left_col, right_col = st.columns([0.5, 0.5])
 with left_col:
     add_cols = st.columns([0.3,0.3,0.4])
     with add_cols[0]:
@@ -376,15 +364,18 @@ with left_col:
     if st.session_state.add_success:
         st.success(st.session_state.add_success)
         st.session_state.add_success = ""
+
 with right_col:
     st.write("")
 
-# Refresh runtime fields and compute announced next dividend, freq, sum12m
+# ----------------- Refresh runtime fields and determine Nasl.Div (declared) -----------------
 today = datetime.now().date()
 one_year_ago = today - timedelta(days=365)
+
 for i, h in enumerate(st.session_state.holdings):
     try:
         info = fetch_ticker_info(h["ticker"])
+        # update runtime-only fields from internet
         st.session_state.holdings[i]["name"] = info.get("name") or h.get("name")
         st.session_state.holdings[i]["price"] = info.get("price") or h.get("price")
         st.session_state.holdings[i]["currency"] = info.get("currency") or h.get("currency")
@@ -392,48 +383,54 @@ for i, h in enumerate(st.session_state.holdings):
         st.session_state.holdings[i]["dividendYield"] = info.get("dividendYield")
         st.session_state.holdings[i]["exDividendDate"] = info.get("exDividendDate")
         # exchange info
-        exsym, ecity, ecountry = infer_exchange_info(h["ticker"], info)
-        if exsym:
-            st.session_state.holdings[i]["exchange"] = exsym
-            st.session_state.holdings[i]["exchange_city"] = ecity
-            st.session_state.holdings[i]["exchange_country"] = ecountry
-        # auto-declared detection
+        exch_sym = info.get("exchange") or h.get("exchange")
+        country = info.get("country") or h.get("exchange_country")
+        if exch_sym:
+            ex_sym, ex_city, ex_country = infer_exchange_info(h["ticker"], info)
+            if ex_sym:
+                st.session_state.holdings[i]["exchange"] = ex_sym
+                st.session_state.holdings[i]["exchange_city"] = ex_city
+                st.session_state.holdings[i]["exchange_country"] = ex_country
+            else:
+                st.session_state.holdings[i]["exchange"] = exch_sym
+                st.session_state.holdings[i]["exchange_country"] = country
+        # auto-declared based on exDividendDate
         if info.get("exDividendDate") and info.get("exDividendDate") > today:
             st.session_state.holdings[i]["auto_declared"] = True
             st.session_state.holdings[i]["declared"] = True
-        # dividends series sum last 12m and freq
+        # compute sum of dividends in last 12 months (for Roc.Div% fallback)
         divs = info.get("dividends_series")
         sum_last12 = None
-        freq_label = "Unknown"
-        next_div_auto = None
         if divs is not None and len(divs) > 0:
             try:
+                # try to select dividends >= one_year_ago
                 try:
                     recent = divs[divs.index.date >= one_year_ago]
                 except Exception:
                     recent = divs[divs.index >= one_year_ago]
                 if recent is None or len(recent) == 0:
-                    recent = divs.tail(12)
+                    recent = divs.tail(8)
                 sum_last12 = float(recent.sum()) if recent is not None else None
-            except:
+            except Exception:
                 sum_last12 = None
-            freq_label = infer_frequency_label(divs)
-            try:
-                next_div_auto = float(divs.tail(1).iloc[0])
-            except:
-                next_div_auto = None
         st.session_state.holdings[i]["_sum_div_12m"] = sum_last12
-        st.session_state.holdings[i]["_freq_label"] = freq_label
-        st.session_state.holdings[i]["_next_div_auto"] = next_div_auto
-        # determine nasl.div (priority: user next_div -> explicit raw info -> fallback last paid)
+
+        # --- Determine announced next dividend (Nasl.Div) if available ---
+        # Priority:
+        # 1) user-specified h["next_div"]
+        # 2) explicit field(s) in yfinance info (try several known keys)
+        # 3) fallback to _next_div_auto (last paid) if no official announced value
         nasl_val = None
+        # 1) user
         if h.get("next_div") is not None:
             try:
                 nasl_val = float(h.get("next_div"))
             except:
                 nasl_val = None
+        # 2) try known keys in raw_info
         raw = info.get("raw_info") or {}
-        candidate_keys = ["nextDividend","nextDividendAmount","forwardDividendRate","upcomingDividend","upcomingDividendAmount","next_dividend"]
+        # possible keys that may contain announced upcoming dividend (varies by source)
+        candidate_keys = ["nextDividend", "nextDividendAmount", "forwardDividendRate", "next_dividend", "upcomingDividend", "upcomingDividendAmount"]
         for k in candidate_keys:
             if nasl_val is None:
                 v = raw.get(k)
@@ -441,21 +438,28 @@ for i, h in enumerate(st.session_state.holdings):
                     try:
                         nasl_val = float(v)
                     except:
+                        # some fields might be dicts, try extraction
                         try:
-                            if isinstance(v, dict) and "amount" in v:
-                                nasl_val = float(v["amount"])
+                            if isinstance(v, dict):
+                                # e.g. {'amount': 0.83}
+                                if "amount" in v:
+                                    nasl_val = float(v["amount"])
                         except:
                             nasl_val = None
-        if nasl_val is None and next_div_auto is not None:
-            nasl_val = next_div_auto
-        st.session_state.holdings[i]["_nasl_div_announced"] = nasl_val
+        # some providers put next dividend under 'forwardAnnualDividendRate' or similar; we don't use annual here
+        # 3) fallback to last paid dividend if available (estimate, not declared)
+        if nasl_val is None and h.get("_next_div_auto") is not None:
+            try:
+                nasl_val = float(h.get("_next_div_auto"))
+            except:
+                nasl_val = None
+        st.session_state.holdings[i]["_nasl_div_announced"] = nasl_val  # runtime-only
     except Exception:
         st.session_state.holdings[i]["_sum_div_12m"] = None
-        st.session_state.holdings[i]["_freq_label"] = "Unknown"
         st.session_state.holdings[i]["_nasl_div_announced"] = None
         pass
 
-# Build Ex-Dividend table (Div.Frek, Nasl.Div, Nasl.Div[%], Celk.Div)
+# ----------------- Build ex-div table (Nasl.Div and Nasl.Div[%] use announced next dividend) -----------------
 def parse_date_safe(s):
     try:
         return datetime.strptime(s, "%d/%m/%y")
@@ -471,10 +475,10 @@ for h in st.session_state.holdings:
         continue
     if ex_date <= today:
         continue
-    qty = float(h.get("quantity",0))
+    qty = h.get("quantity", 0)
     price = h.get("price")
     currency = h.get("currency","")
-    # Roc.Div% compute
+    # Roc.Div[%] prefer sum of last12 months
     sum_div_12m = h.get("_sum_div_12m")
     roc_pct = "-"
     roc_amt = "-"
@@ -499,7 +503,8 @@ for h in st.session_state.holdings:
             except:
                 roc_pct = "-"
                 roc_amt = "-"
-    # Nasl.Div
+
+    # Nasl.Div: take announced next dividend if available (runtime-only field _nasl_div_announced), prefer user h["next_div"]
     nasl_val = None
     if h.get("next_div") is not None:
         try:
@@ -510,26 +515,20 @@ for h in st.session_state.holdings:
         nasl_val = h.get("_nasl_div_announced")
     nasl_disp = "-"
     nasl_pct = "-"
-    celk_disp = "-"
-    if nasl_val is not None:
+    if nasl_val is not None and price:
         try:
-            nasl_disp = f"{float(nasl_val):.4g} {currency}" if currency else f"{float(nasl_val):.4g}"
+            nasl_disp = f"{float(nasl_val):.4g} {currency}"
+            nasl_pct = f"{(float(nasl_val)/float(price))*100:.3f} %"
+        except:
+            nasl_disp = f"{float(nasl_val):.4g} {currency}"
+            nasl_pct = "-"
+    elif nasl_val is not None:
+        try:
+            nasl_disp = f"{float(nasl_val):.4g}"
         except:
             nasl_disp = str(nasl_val)
-        if price:
-            try:
-                nasl_pct = f"{(float(nasl_val)/float(price))*100:.3f} %"
-            except:
-                nasl_pct = "-"
-        try:
-            total = float(nasl_val) * qty
-            celk_disp = f"{total:.4f} {currency}" if currency else f"{total:.4f}"
-            # strip trailing zeros
-            if "." in celk_disp:
-                celk_disp = celk_disp.rstrip("0").rstrip(".")
-        except:
-            celk_disp = "-"
-    freq_label = h.get("_freq_label","Unknown")
+
+    act_price = f"{price} {currency}" if price is not None else f"- {currency}"
     ex_rows.append({
         "Ticker": h["ticker"],
         "Meno": h.get("name",""),
@@ -537,22 +536,23 @@ for h in st.session_state.holdings:
         "Ex Div Date": ex_date.strftime("%d/%m/%y"),
         "Roc.Div[%]": roc_pct,
         "Roc.Div": roc_amt,
-        "Div.Frek": freq_label,
+        "Div.Frek": h.get("_freq_label","Unknown"),
         "Nasl.Div": nasl_disp,
         "Nasl.Div[%]": nasl_pct,
-        "Celk.Div": celk_disp
+        "Akt.Cena": act_price
     })
 
 ex_rows = sorted(ex_rows, key=lambda r: parse_date_safe(r["Ex Div Date"]))
+
 if len(ex_rows) == 0:
     st.info("Žiadne ohlásené (Declared) nasledujúce dividendy pre tvoje akcie.")
 else:
-    cols_exdiv = ["Ticker","Meno","Mnozstvo","Ex Div Date","Roc.Div[%]","Roc.Div","Div.Frek","Nasl.Div","Nasl.Div[%]","Celk.Div"]
+    cols_exdiv = ["Ticker","Meno","Mnozstvo","Ex Div Date","Roc.Div[%]","Roc.Div","Div.Frek","Nasl.Div","Nasl.Div[%]","Akt.Cena"]
     html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in cols_exdiv) + '</tr>'
     for r in ex_rows:
         html += "<tr>" + ''.join(f"<td>{r.get(c,'')}</td>" for c in cols_exdiv) + "</tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-# Footer
-st.markdown('<div style="font-size:11px;color:#999">Poznámka: Nasl.Div sa snaží získať oficiálne ohlásenie (ak yfinance vráti), inak použije fallback; Div.Frek je odhad z histórie.</div>', unsafe_allow_html=True)
+# footer note
+st.markdown('<div style="font-size:11px;color:#999">Poznámka: Nasl.Div sa snaží najprv použiť užívateľom zadanú hodnotu, potom oficiálne ohlásenú nasledujúcu dividendu (ak ju yfinance vráti pod niektorým z polí) a ak nie je dostupná, použije sa historická posledná vyplatená dividenda ako fallback. Nasl.Div[%] = Nasl.Div / Akt.Cena * 100.</div>', unsafe_allow_html=True)
