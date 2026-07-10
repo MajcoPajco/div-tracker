@@ -148,6 +148,8 @@ def load_holdings_file():
             "exchange_country": None,
             "_next_div_auto": None,
             "_freq_label": None,
+            "_sum_div_12m": None,
+            "_nasl_div_announced": None,
             "auto_declared": False
         })
     return holdings
@@ -207,7 +209,8 @@ def fetch_ticker_info(ticker):
         "dividends_series": divs,
         "valid": valid,
         "exchange": exch,
-        "country": country
+        "country": country,
+        "raw_info": info
     }
 
 # suffix map (fallback)
@@ -250,6 +253,44 @@ def infer_exchange_info(ticker, info):
         if suf in SUFFIX_MAP:
             return SUFFIX_MAP[suf]
     return ("", "", "")
+
+# ----------------- Frequency inference helper -----------------
+def infer_frequency_label(divs_series):
+    # return label like Monthly/Quarterly/Semiannual/Yearly/Irregular/Unknown
+    if divs_series is None or len(divs_series) == 0:
+        return "Unknown"
+    try:
+        # count payments in last 365 days
+        cutoff = datetime.now().date() - timedelta(days=365)
+        try:
+            recent = divs_series[divs_series.index.date >= cutoff]
+            count = int(recent.count())
+        except Exception:
+            recent = divs_series[divs_series.index >= cutoff]
+            count = int(recent.count())
+        if count >= 10:
+            return "Monthly"
+        if 3 <= count <= 5:
+            return "Quarterly"
+        if count == 2:
+            return "Semiannual"
+        if count == 1:
+            return "Yearly"
+        if count == 0:
+            # fallback: look at last few payments to guess
+            total = int(divs_series.tail(8).count())
+            if total >= 8:
+                return "Monthly"
+            if 3 <= total <= 5:
+                return "Quarterly"
+            if total == 2:
+                return "Semiannual"
+            if total == 1:
+                return "Yearly"
+            return "Irregular"
+        return "Irregular"
+    except Exception:
+        return "Unknown"
 
 # ----------------- Init session -----------------
 if "holdings" not in st.session_state:
@@ -303,6 +344,8 @@ def handle_add():
             "exchange_country": exch_country,
             "_next_div_auto": None,
             "_freq_label": None,
+            "_sum_div_12m": None,
+            "_nasl_div_announced": None,
             "auto_declared": False
         })
     save_holdings_file()
@@ -314,13 +357,12 @@ def handle_add():
     except:
         pass
 
-# ----------------- Layout: show restored exchanges table (with Znacka) -----------------
+# ----------------- Layout: exchanges table -----------------
 st.markdown('<div class="main-title">Dividend tracker</div>', unsafe_allow_html=True)
 
 exchange_rows = get_exchange_rows()
 cols_ex = ["Burza","Znacka","Mesto","Stat","Miestny cas","Stav"]
 
-# adapt rows for desired render order
 rows_render = []
 for r in exchange_rows:
     rows_render.append({
@@ -371,105 +413,90 @@ with left_col:
 with right_col:
     st.write("")
 
-# ----------------- Refresh runtime fields from internet & compute Roc.Div% using last 12 months dividends -----------------
+# ----------------- Refresh runtime fields and compute Nasl.Div & frequency -----------------
 today = datetime.now().date()
 one_year_ago = today - timedelta(days=365)
 
 for i, h in enumerate(st.session_state.holdings):
     try:
         info = fetch_ticker_info(h["ticker"])
-        # update runtime-only fields from internet (do NOT save these to file)
+        # runtime updates
         st.session_state.holdings[i]["name"] = info.get("name") or h.get("name")
         st.session_state.holdings[i]["price"] = info.get("price") or h.get("price")
         st.session_state.holdings[i]["currency"] = info.get("currency") or h.get("currency")
         st.session_state.holdings[i]["dividendRate"] = info.get("dividendRate")
         st.session_state.holdings[i]["dividendYield"] = info.get("dividendYield")
         st.session_state.holdings[i]["exDividendDate"] = info.get("exDividendDate")
-        # exchange/country from yfinance preferred
-        exch_sym = info.get("exchange") or h.get("exchange")
-        country = info.get("country") or h.get("exchange_country")
+        # exchange info
+        exch_sym, ex_city, ex_country = infer_exchange_info(h["ticker"], info)
         if exch_sym:
-            ex_sym, ex_city, ex_country = infer_exchange_info(h["ticker"], info)
-            if ex_sym:
-                st.session_state.holdings[i]["exchange"] = ex_sym
-                st.session_state.holdings[i]["exchange_city"] = ex_city
-                st.session_state.holdings[i]["exchange_country"] = ex_country
-            else:
-                st.session_state.holdings[i]["exchange"] = exch_sym
-                st.session_state.holdings[i]["exchange_country"] = country
-        # auto-declared detection
+            st.session_state.holdings[i]["exchange"] = exch_sym
+            st.session_state.holdings[i]["exchange_city"] = ex_city
+            st.session_state.holdings[i]["exchange_country"] = ex_country
+        # auto-declared by exDividendDate presence in future
         if info.get("exDividendDate") and info.get("exDividendDate") > today:
             st.session_state.holdings[i]["auto_declared"] = True
             st.session_state.holdings[i]["declared"] = True
-        # compute sum of dividends in last 12 months if available
+        # dividends series and sum last 12 months
         divs = info.get("dividends_series")
         sum_last12 = None
+        freq_label = "Unknown"
+        next_div_auto = None
         if divs is not None and len(divs) > 0:
             try:
-                # filter by date (index may be pandas.DatetimeIndex)
-                # some pandas versions allow divs.index.date
-                dates = getattr(divs.index, 'date', None)
-                if dates is not None:
-                    recent = divs[[d >= one_year_ago for d in divs.index.date]]
-                else:
-                    recent = divs[divs.index >= (one_year_ago)]
+                try:
+                    recent = divs[divs.index.date >= one_year_ago]
+                except Exception:
+                    recent = divs[divs.index >= one_year_ago]
                 if recent is None or len(recent) == 0:
-                    # fallback to last few entries
-                    recent = divs.tail(8)
+                    recent = divs.tail(12)
                 sum_last12 = float(recent.sum()) if recent is not None else None
             except Exception:
                 sum_last12 = None
+            # frequency
+            freq_label = infer_frequency_label(divs)
+            # last paid dividend as fallback for next
+            try:
+                next_div_auto = float(divs.tail(1).iloc[0])
+            except Exception:
+                next_div_auto = None
         st.session_state.holdings[i]["_sum_div_12m"] = sum_last12
+        st.session_state.holdings[i]["_freq_label"] = freq_label
+        st.session_state.holdings[i]["_next_div_auto"] = next_div_auto
+
+        # Determine announced next dividend (priority: user next_div -> explicit raw fields -> fallback last paid)
+        nasl_val = None
+        if h.get("next_div") is not None:
+            try:
+                nasl_val = float(h.get("next_div"))
+            except:
+                nasl_val = None
+        # try raw_info keys for announced next dividend
+        raw = info.get("raw_info") or {}
+        candidate_keys = ["nextDividend", "nextDividendAmount", "forwardDividendRate", "next_dividend", "upcomingDividend", "upcomingDividendAmount", "nextDividendDate"]
+        for k in candidate_keys:
+            if nasl_val is None:
+                v = raw.get(k)
+                if v is not None:
+                    try:
+                        nasl_val = float(v)
+                    except:
+                        try:
+                            if isinstance(v, dict) and "amount" in v:
+                                nasl_val = float(v["amount"])
+                        except:
+                            nasl_val = None
+        if nasl_val is None and next_div_auto is not None:
+            nasl_val = next_div_auto
+        st.session_state.holdings[i]["_nasl_div_announced"] = nasl_val
+
     except Exception:
         st.session_state.holdings[i]["_sum_div_12m"] = None
+        st.session_state.holdings[i]["_freq_label"] = "Unknown"
+        st.session_state.holdings[i]["_nasl_div_announced"] = None
         pass
 
-# ----------------- Build holdings HTML table -----------------
-hdr_cols = ["Ticker","Meno","Burza","Štát","Akt.Cena","Množstvo","Roc.Div[%]"]
-holdings_html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in hdr_cols) + '</tr>'
-for h in st.session_state.holdings:
-    ticker = h.get("ticker","")
-    name = h.get("name","") or ""
-    exch = h.get("exchange","") or ""
-    exch_country = h.get("exchange_country","") or ""
-    price = h.get("price")
-    currency = h.get("currency","")
-    # FIRST use sum of dividends in last 12 months if available
-    sum_div_12m = h.get("_sum_div_12m")
-    annual_pct = "-"
-    if sum_div_12m is not None and price:
-        try:
-            annual_pct = f"{(float(sum_div_12m)/float(price))*100:.2f} %"
-        except:
-            annual_pct = "-"
-    else:
-        # fallback to dividendRate or dividendYield*price
-        annual_div = h.get("dividendRate")
-        if annual_div is None and h.get("dividendYield") and price:
-            try:
-                annual_div = float(h.get("dividendYield")) * float(price)
-            except:
-                annual_div = None
-        if annual_div is not None and price:
-            try:
-                annual_pct = f"{(float(annual_div)/float(price))*100:.2f} %"
-            except:
-                annual_pct = "-"
-    price_disp = f"{price} {currency}" if price is not None else f"- {currency}"
-    qty_disp = format_qty(h.get("quantity",0))
-    holdings_html += "<tr>"
-    holdings_html += f"<td>{ticker}</td>"
-    holdings_html += f"<td>{name}</td>"
-    holdings_html += f"<td>{exch}</td>"
-    holdings_html += f"<td>{exch_country}</td>"
-    holdings_html += f"<td>{price_disp}</td>"
-    holdings_html += f"<td>{qty_disp}</td>"
-    holdings_html += f"<td>{annual_pct}</td>"
-    holdings_html += "</tr>"
-holdings_html += "</table>"
-st.markdown(holdings_html, unsafe_allow_html=True)
-
-# ----------------- Ex-Dividend section (uses same 12m sum logic) -----------------
+# ----------------- Build ex-div table (with Nasl.Div and Nasl.Div[%] and Div.Frek and Celk.Div) -----------------
 def parse_date_safe(s):
     try:
         return datetime.strptime(s, "%d/%m/%y")
@@ -485,19 +512,20 @@ for h in st.session_state.holdings:
         continue
     if ex_date <= today:
         continue
-    qty = h.get("quantity", 0)
+    qty = float(h.get("quantity", 0))
     price = h.get("price")
     currency = h.get("currency","")
+    # Roc.Div% using sum last 12m if present else dividendRate fallback
     sum_div_12m = h.get("_sum_div_12m")
-    annual_pct = "-"
-    annual_disp = "-"
+    roc_pct = "-"
+    roc_amt = "-"
     if sum_div_12m is not None and price:
         try:
-            annual_pct = f"{(float(sum_div_12m)/float(price))*100:.2f} %"
-            annual_disp = f"{float(sum_div_12m):.4g} {currency}"
+            roc_pct = f"{(float(sum_div_12m)/float(price))*100:.2f} %"
+            roc_amt = f"{float(sum_div_12m):.4g} {currency}"
         except:
-            annual_pct = "-"
-            annual_disp = "-"
+            roc_pct = "-"
+            roc_amt = "-"
     else:
         annual_div = h.get("dividendRate")
         if annual_div is None and h.get("dividendYield") and price:
@@ -505,23 +533,45 @@ for h in st.session_state.holdings:
                 annual_div = float(h.get("dividendYield")) * float(price)
             except:
                 annual_div = None
-        if annual_div is not None:
+        if annual_div is not None and price:
             try:
-                annual_pct = f"{(float(annual_div)/float(price))*100:.2f} %"
-                annual_disp = f"{float(annual_div):.4g} {currency}"
+                roc_pct = f"{(float(annual_div)/float(price))*100:.2f} %"
+                roc_amt = f"{float(annual_div):.4g} {currency}"
             except:
-                annual_pct = "-"
-                annual_disp = "-"
-    nasl_val = h.get("next_div")
-    if nasl_val is None and h.get("_next_div_auto") is not None:
-        nasl_val = h.get("_next_div_auto")
-    nasl_disp = f"{float(nasl_val):.4g} {currency}" if nasl_val is not None else "-"
-    nasl_pct = "-"
-    if nasl_val is not None and price:
+                roc_pct = "-"
+                roc_amt = "-"
+
+    # Nasl.Div and Nasl.Div[%]
+    nasl_val = None
+    if h.get("next_div") is not None:
         try:
-            nasl_pct = f"{(float(nasl_val)/float(price))*100:.4f} %"
+            nasl_val = float(h.get("next_div"))
         except:
-            nasl_pct = "-"
+            nasl_val = None
+    if nasl_val is None:
+        nasl_val = h.get("_nasl_div_announced")
+    nasl_disp = "-"
+    nasl_pct = "-"
+    celk_disp = "-"
+    if nasl_val is not None:
+        try:
+            nasl_disp = f"{float(nasl_val):.4g} {currency}" if currency else f"{float(nasl_val):.4g}"
+        except:
+            nasl_disp = str(nasl_val)
+        if price:
+            try:
+                nasl_pct = f"{(float(nasl_val)/float(price))*100:.3f} %"
+            except:
+                nasl_pct = "-"
+        # Celk.Div = nasl_val * qty
+        try:
+            total = float(nasl_val) * qty
+            celk_disp = f"{total:.4f} {currency}" if currency else f"{total:.4f}"
+            # strip trailing zeros
+            celk_disp = celk_disp.replace(".0000","").replace(".000","").replace(".00","").replace(".0","")
+        except:
+            celk_disp = "-"
+
     freq_label = h.get("_freq_label", "Unknown")
     act_price = f"{price} {currency}" if price is not None else f"- {currency}"
     ex_rows.append({
@@ -529,12 +579,12 @@ for h in st.session_state.holdings:
         "Meno": h.get("name",""),
         "Mnozstvo": format_qty(h.get("quantity",0)),
         "Ex Div Date": ex_date.strftime("%d/%m/%y"),
-        "Roc.Div[%]": annual_pct,
-        "Roc.Div": annual_disp,
+        "Roc.Div[%]": roc_pct,
+        "Roc.Div": roc_amt,
         "Div.Frek": freq_label,
         "Nasl.Div": nasl_disp,
         "Nasl.Div[%]": nasl_pct,
-        "Akt.Cena": act_price
+        "Celk.Div": celk_disp
     })
 
 ex_rows = sorted(ex_rows, key=lambda r: parse_date_safe(r["Ex Div Date"]))
@@ -542,12 +592,12 @@ ex_rows = sorted(ex_rows, key=lambda r: parse_date_safe(r["Ex Div Date"]))
 if len(ex_rows) == 0:
     st.info("Žiadne ohlásené (Declared) nasledujúce dividendy pre tvoje akcie.")
 else:
-    cols_exdiv = ["Ticker","Meno","Mnozstvo","Ex Div Date","Roc.Div[%]","Roc.Div","Div.Frek","Nasl.Div","Nasl.Div[%]","Akt.Cena"]
+    cols_exdiv = ["Ticker","Meno","Mnozstvo","Ex Div Date","Roc.Div[%]","Roc.Div","Div.Frek","Nasl.Div","Nasl.Div[%]","Celk.Div"]
     html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in cols_exdiv) + '</tr>'
     for r in ex_rows:
         html += "<tr>" + ''.join(f"<td>{r.get(c,'')}</td>" for c in cols_exdiv) + "</tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-# Footer note
-st.markdown('<div style="font-size:11px;color:#999">Poznámka: name/price/exDate/exchange/dividend údaje sa dynamicky aktualizujú z internetu (yfinance) a nie sú ukladané do holdings.json. Uložia sa len ticker a množstvo (a voliteľné user polia declared/next_div).</div>', unsafe_allow_html=True)
+# Footnote
+st.markdown('<div style="font-size:11px;color:#999">Poznámka: Div.Frek je odhad z histórie dividend (Monthly/Quarterly/Semiannual/Yearly/Irregular). Nasl.Div preferuje user-zadanú hodnotu, potom oficiálne pole v yfinance ak je dostupné, inak fallback na poslednú vyplatenú dividendu. Celk.Div = Nasl.Div * moje množstvo akcií.</div>', unsafe_allow_html=True)
