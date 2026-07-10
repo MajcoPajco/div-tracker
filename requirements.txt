@@ -1,5 +1,9 @@
 streamlit
 yfinance
 pandas
+numpy
 pytz
 python-dateutil
+requests
+beautifulsoup4
+lxml
