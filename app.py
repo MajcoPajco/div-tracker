@@ -24,7 +24,84 @@ input[placeholder="Množstvo"] { max-width:190px !important; width:190px !import
 </style>
 """, unsafe_allow_html=True)
 
-# ----------------- Helpers: persist only user fields -----------------
+# ----------------- Exchanges (restored full list) -----------------
+EXCHANGES = [
+    {"name": "NYSE", "city": "New York", "country": "USA", "tz": "America/New_York", "open": time(9,30), "close": time(16,0)},
+    {"name": "NASDAQ", "city": "New York", "country": "USA", "tz": "America/New_York", "open": time(9,30), "close": time(16,0)},
+    {"name": "LSE", "city": "London", "country": "UK", "tz": "Europe/London", "open": time(8,0), "close": time(16,30)},
+    {"name": "Euronext (Paris)", "city": "Paris", "country": "France", "tz": "Europe/Paris", "open": time(9,0), "close": time(17,30)},
+    {"name": "XETRA (Frankfurt)", "city": "Frankfurt", "country": "Germany", "tz": "Europe/Berlin", "open": time(9,0), "close": time(17,30)},
+    {"name": "TSE (Tokyo)", "city": "Tokyo", "country": "Japan", "tz": "Asia/Tokyo", "open": time(9,0), "close": time(15,0)},
+    {"name": "HKEX", "city": "Hong Kong", "country": "Hong Kong", "tz": "Asia/Hong_Kong", "open": time(9,30), "close": time(16,0)},
+    {"name": "SSE (Shanghai)", "city": "Shanghai", "country": "China", "tz": "Asia/Shanghai", "open": time(9,30), "close": time(15,0)},
+]
+
+BRATISLAVA_TZ = pytz.timezone("Europe/Bratislava")
+
+def format_timedelta(td):
+    if td is None:
+        return ""
+    # positive delta
+    if td.total_seconds() < 0:
+        td = -td
+    total_seconds = int(td.total_seconds())
+    hrs = total_seconds // 3600
+    mins = (total_seconds % 3600) // 60
+    return f"{hrs}h {mins}min"
+
+def get_exchange_rows():
+    rows = []
+    for ex in EXCHANGES:
+        tzname = ex["tz"]
+        tzloc = pytz.timezone(tzname)
+        now_local = datetime.now(tzloc)
+        today = now_local.date()
+        # weekend handling
+        def next_open_datetime(tzname, open_time):
+            tzl = pytz.timezone(tzname)
+            candidate = datetime.now(tzl).date()
+            while True:
+                if candidate.weekday() < 5:
+                    return tzl.localize(datetime.combine(candidate, open_time))
+                candidate = candidate + timedelta(days=1)
+        if now_local.weekday() >= 5:
+            next_open = next_open_datetime(tzname, ex["open"])
+            next_open_br = next_open.astimezone(BRATISLAVA_TZ)
+            diff = next_open_br - datetime.now(BRATISLAVA_TZ)
+            display = f"Opens in {format_timedelta(diff)}"
+            color = "red"
+        else:
+            open_dt = tzloc.localize(datetime.combine(today, ex["open"]))
+            close_dt = tzloc.localize(datetime.combine(today, ex["close"]))
+            if open_dt <= now_local <= close_dt:
+                opened_since = now_local - open_dt
+                display = f"Open {format_timedelta(opened_since)}"
+                color = "green"
+            else:
+                if now_local < open_dt:
+                    next_open = open_dt
+                else:
+                    # find next weekday
+                    nxt = today + timedelta(days=1)
+                    while nxt.weekday() >= 5:
+                        nxt += timedelta(days=1)
+                    next_open = tzloc.localize(datetime.combine(nxt, ex["open"]))
+                next_open_br = next_open.astimezone(BRATISLAVA_TZ)
+                diff = next_open_br - datetime.now(BRATISLAVA_TZ)
+                display = f"Opens in {format_timedelta(diff)}"
+                color = "red"
+        local_now_for_display = datetime.now(tzloc).strftime("%H:%M")
+        rows.append({
+            "Burza": ex["name"],
+            "Mesto": ex["city"],
+            "Stat": ex["country"],
+            "Miestny cas": local_now_for_display,
+            "Stav": display,
+            "color": color
+        })
+    return rows
+
+# ----------------- Persistence helpers (only user fields persisted) -----------------
 def save_holdings_file():
     try:
         to_save = []
@@ -33,7 +110,6 @@ def save_holdings_file():
                 "ticker": h.get("ticker"),
                 "quantity": h.get("quantity", 0)
             }
-            # if user-managed fields exist, persist them too
             if h.get("declared") is not None:
                 item["declared"] = bool(h.get("declared", False))
             if h.get("next_div") is not None:
@@ -57,12 +133,10 @@ def load_holdings_file():
     for item in data:
         holdings.append({
             "ticker": item.get("ticker"),
-            # quantity persisted
             "quantity": item.get("quantity", 0),
-            # preserve user fields if present, else defaults
             "declared": bool(item.get("declared", False)),
             "next_div": item.get("next_div", None),
-            # runtime-only fields (will be filled from yfinance)
+            # runtime-only fields (filled from internet)
             "name": None,
             "price": None,
             "currency": None,
@@ -130,7 +204,7 @@ def fetch_ticker_info(ticker):
         "country": country
     }
 
-# simple suffix map for exchange inference (extend as needed)
+# simple suffix map for fallback (extendable)
 SUFFIX_MAP = {
     "L": ("LSE","London","UK"),
     "PA": ("Euronext (Paris)","Paris","France"),
@@ -210,10 +284,8 @@ def handle_add():
         st.session_state.holdings.append({
             "ticker": info["ticker"],
             "quantity": float(qty),
-            # persisted user fields:
             "declared": False,
             "next_div": None,
-            # runtime-only fields (start empty; will be filled below)
             "name": None,
             "price": None,
             "currency": None,
@@ -227,7 +299,6 @@ def handle_add():
             "_freq_label": None,
             "auto_declared": False
         })
-    # persist only user fields (ticker + quantity + declared/next_div)
     save_holdings_file()
     st.session_state.add_success = f"Pridané: {t} ({format_qty(qty)})"
     st.session_state["add_ticker"] = ""
@@ -237,24 +308,28 @@ def handle_add():
     except:
         pass
 
-# ----------------- Layout: exchanges top (compact) -----------------
+# ----------------- Layout: show restored exchanges table (top) -----------------
 st.markdown('<div class="main-title">Dividend tracker</div>', unsafe_allow_html=True)
 
-# small exchanges list (kept minimal)
-EXCHANGES_SIMPLE = [
-    {"name":"NYSE","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
-    {"name":"NASDAQ","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
-    {"name":"LSE","city":"London","country":"UK","tz":"Europe/London","open":time(8,0),"close":time(16,30)},
-]
-rows = []
-for ex in EXCHANGES_SIMPLE:
-    rows.append({"Burza": ex["name"], "Mesto": ex["city"], "Stat": ex["country"], "Miestny cas": datetime.now(pytz.timezone(ex["tz"])).strftime("%H:%M"), "Stav": ""})
+exchange_rows = get_exchange_rows()
 cols_ex = ["Burza","Mesto","Stat","Miestny cas","Stav"]
-html_ex = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in cols_ex) + '</tr>'
-for r in rows:
-    html_ex += "<tr>" + ''.join(f"<td>{r.get(c,'')}</td>" for c in cols_ex) + "</tr>"
-html_ex += "</table>"
-st.markdown(html_ex, unsafe_allow_html=True)
+def render_table(rows, columns):
+    html = '<table class="compact-table"><tr>'
+    for c in columns:
+        html += f"<th>{c}</th>"
+    html += "</tr>"
+    for r in rows:
+        color = r.get("color", "black")
+        row_color = f"color:{color};"
+        html += f"<tr style='{row_color}'>"
+        for c in columns:
+            val = r.get(c, "")
+            html += f"<td>{val}</td>"
+        html += "</tr>"
+    html += "</table>"
+    return html
+
+st.markdown(render_table(exchange_rows, cols_ex), unsafe_allow_html=True)
 st.write("")
 
 # ----------------- Add inputs (left) -----------------
@@ -281,18 +356,15 @@ today = datetime.now().date()
 for i, h in enumerate(st.session_state.holdings):
     try:
         info = fetch_ticker_info(h["ticker"])
-        # update runtime-only fields from internet (do NOT save these to file)
         st.session_state.holdings[i]["name"] = info.get("name") or h.get("name")
         st.session_state.holdings[i]["price"] = info.get("price") or h.get("price")
         st.session_state.holdings[i]["currency"] = info.get("currency") or h.get("currency")
         st.session_state.holdings[i]["dividendRate"] = info.get("dividendRate")
         st.session_state.holdings[i]["dividendYield"] = info.get("dividendYield")
         st.session_state.holdings[i]["exDividendDate"] = info.get("exDividendDate")
-        # exchange/country from yfinance preferred
         exch_sym = info.get("exchange") or h.get("exchange")
         country = info.get("country") or h.get("exchange_country")
         if exch_sym:
-            # infer nicer labels
             ex_sym, ex_city, ex_country = infer_exchange_info(h["ticker"], info)
             if ex_sym:
                 st.session_state.holdings[i]["exchange"] = ex_sym
@@ -301,11 +373,9 @@ for i, h in enumerate(st.session_state.holdings):
             else:
                 st.session_state.holdings[i]["exchange"] = exch_sym
                 st.session_state.holdings[i]["exchange_country"] = country
-        # auto-declared detection
         if info.get("exDividendDate") and info.get("exDividendDate") > today:
             st.session_state.holdings[i]["auto_declared"] = True
             st.session_state.holdings[i]["declared"] = True
-        # infer next_div from history (runtime only)
         try:
             divs = info.get("dividends_series")
             if divs is not None and len(divs) > 0:
@@ -319,11 +389,9 @@ for i, h in enumerate(st.session_state.holdings):
             st.session_state.holdings[i]["_next_div_auto"] = None
             st.session_state.holdings[i]["_freq_label"] = "Unknown"
     except Exception:
-        # keep existing runtime values if fetch fails
         pass
 
 # ----------------- Build holdings table (compact) -----------------
-# Desired order: Ticker | Meno | Burza | Štát | Akt.Cena | Množstvo | Roc.Div[%]
 hdr_cols = ["Ticker","Meno","Burza","Štát","Akt.Cena","Množstvo","Roc.Div[%]"]
 holdings_html = '<table class="compact-table"><tr>' + ''.join(f"<th>{c}</th>" for c in hdr_cols) + '</tr>'
 for h in st.session_state.holdings:
@@ -359,7 +427,7 @@ for h in st.session_state.holdings:
 holdings_html += "</table>"
 st.markdown(holdings_html, unsafe_allow_html=True)
 
-# ----------------- Ex-Dividend section (same logic) -----------------
+# ----------------- Ex-Dividend section (unchanged) -----------------
 def parse_date_safe(s):
     try:
         return datetime.strptime(s, "%d/%m/%y")
@@ -428,4 +496,4 @@ else:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-st.markdown('<div style="font-size:11px;color:#999">Poznámka: name/price/exDate/exchange/dividend údaje sa dynamicky aktualizujú z internetu (yfinance) a nie sú ukladané do holdings.json. Uložia sa len ticker a množstvo (a voliteľné user polia declared/next_div).</div>', unsafe_allow_html=True)
+st.markdown('<div style="font-size:11px;color:#999">Poznámka: name/price/exDate/exchange/dividend údaje sa dynamicky aktualizujú z internetu (yfinance). Uložia sa len ticker a množstvo (a voliteľné user polia declared/next_div) do holdings.json.</div>', unsafe_allow_html=True)
