@@ -1,7 +1,7 @@
 import streamlit as st
 import datetime
 import pytz
-import textwrap # Nový import
+import textwrap
 
 # --- Konfigurácia Streamlit stránky ---
 st.set_page_config(
@@ -23,7 +23,7 @@ EXCHANGES = [
     {"name": "TSE (Tokio)", "city": "Tokio", "country": "Japonsko", "timezone_str": "Asia/Tokyo", "open_h": 9, "open_m": 0, "close_h": 15, "close_m": 0},
     {"name": "SSE (Šanghaj)", "city": "Šanghaj", "country": "Čína", "timezone_str": "Asia/Shanghai", "open_h": 9, "open_m": 30, "close_h": 15, "close_m": 0},
     {"name": "ASX (Sydney)", "city": "Sydney", "country": "Austrália", "timezone_str": "Australia/Sydney", "open_h": 10, "open_m": 0, "close_h": 16, "close_m": 0},
-    {"name": "TSX (Toronto)", "country": "Kanada", "timezone_str": "America/Toronto", "open_h": 9, "open_m": 30, "close_h": 16, "close_m": 0},
+    {"name": "TSX (Toronto)", "city": "Toronto", "country": "Kanada", "timezone_str": "America/Toronto", "open_h": 9, "open_m": 30, "close_h": 16, "close_m": 0}, # <-- Opravený riadok
     {"name": "BSE (Bombaj)", "city": "Bombaj", "country": "India", "timezone_str": "Asia/Kolkata", "open_h": 9, "open_m": 15, "close_h": 15, "close_m": 30},
 ]
 
@@ -235,10 +235,3 @@ html_table_parts.append("""
 # Spojíme všetky časti a odstránime spoločné úvodné odsadenie
 final_html_table = textwrap.dedent("".join(html_table_parts))
 st.markdown(final_html_table, unsafe_allow_html=True)
-
-# Poznámka: Streamlit aplikácie sa na Streamlit Cloud automaticky obnovujú
-# v pravidelných intervaloch alebo pri interakcii používateľa.
-# Pre veľmi časté (napr. každú sekundu) obnovovanie by bolo potrebné
-# použiť pokročilejšie techniky (napr. JavaScript na strane klienta),
-# čo by však zvýšilo zložitosť a spotrebu zdrojov.
-# Pre tento účel je predvolené správanie Streamlitu dostatočné.
