@@ -5,23 +5,21 @@ from datetime import datetime, time, timedelta
 
 st.set_page_config(page_title="Dividend tracker", layout="wide")
 
-# CSS kompaktné + úzke add polia
+# CSS - kompaktná tabuľka bez medzier medzi riadkami
 st.markdown("""
 <style>
 .main-title { font-size:12px; font-weight:600; margin-bottom:6px; }
 .compact-table { background: white; border-collapse: collapse; width: 100%; font-size:13px; }
 .compact-table th, .compact-table td { padding:6px 8px; border-bottom: 1px solid #eee; text-align:left; white-space: nowrap; }
 .compact-table tr { height: 28px; }
-
-/* vstupné polia ~5cm */
+.compact-table tbody tr { margin: 0; }
 input[placeholder="Ticker"] { max-width:190px !important; width:190px !important; height:30px !important; }
 input[placeholder="Množstvo"] { max-width:190px !important; width:190px !important; height:30px !important; }
-
 .stButton>button { margin-top: 0.2rem; padding: .35rem .6rem; font-size:13px; }
 </style>
 """, unsafe_allow_html=True)
 
-# Exchanges konštanty
+# Exchanges
 EXCHANGES = [
     {"name":"NYSE","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
     {"name":"NASDAQ","city":"New York","country":"USA","tz":"America/New_York","open":time(9,30),"close":time(16,0)},
@@ -79,6 +77,7 @@ def get_exchange_rows():
         rows.append({"Burza": ex["name"], "Mesto": ex["city"], "Stat": ex["country"], "Miestny cas": local_now, "Stav": display, "color": color})
     return rows
 
+# Header
 st.markdown('<div class="main-title">Dividend tracker</div>', unsafe_allow_html=True)
 
 # Exchanges table
@@ -91,11 +90,11 @@ html += "</table>"
 st.markdown(html, unsafe_allow_html=True)
 st.write("")
 
-# session holdings
+# Session holdings
 if "holdings" not in st.session_state:
     st.session_state.holdings = []
 
-# flags for add result messages
+# Messages
 if "add_error" not in st.session_state:
     st.session_state.add_error = ""
 if "add_success" not in st.session_state:
@@ -110,7 +109,7 @@ def fetch_ticker_info(ticker):
         info = tk.info or {}
     except:
         info = {}
-    # check history as indicator of valid ticker
+    # validate by market price/history
     valid = False
     try:
         hist = tk.history(period="1d")
@@ -121,7 +120,6 @@ def fetch_ticker_info(ticker):
     price = info.get("regularMarketPrice")
     if price is not None:
         valid = True
-    # normalize exDividendDate
     exDate = info.get("exDividendDate")
     ex_dt = None
     if exDate:
@@ -141,11 +139,10 @@ def fetch_ticker_info(ticker):
         "valid": valid
     }
 
-# handler for adding on Enter (attached to Množstvo input)
+# Add handler (Enter in Množstvo triggers)
 def handle_add():
     t = st.session_state.get("add_ticker","").strip().upper()
     raw_qty = st.session_state.get("add_qty","").strip()
-    # clear previous messages
     st.session_state.add_error = ""
     st.session_state.add_success = ""
     if t == "" or raw_qty == "":
@@ -158,11 +155,9 @@ def handle_add():
     info = fetch_ticker_info(t)
     if not info.get("valid", False):
         st.session_state.add_error = f"Unknown ticker: {t}"
-        # clear inputs
         st.session_state["add_ticker"] = ""
         st.session_state["add_qty"] = ""
         return
-    # merge or append
     found = False
     for h in st.session_state.holdings:
         if h["ticker"] == info["ticker"]:
@@ -191,36 +186,67 @@ def handle_add():
             "auto_declared": False
         })
     st.session_state.add_success = f"Pridané: {t} ({qty})"
-    # clear inputs
     st.session_state["add_ticker"] = ""
     st.session_state["add_qty"] = ""
-    # refresh UI
     try:
         st.experimental_rerun()
     except:
         pass
 
-# Left block: inputs (no button). The user presses Enter in Množstvo to submit.
+# Layout: left block for add and edit, right block empty
 left_col, right_col = st.columns([0.5, 0.5])
+
+# Add inputs (no button) - Enter in Množstvo triggers handle_add
 with left_col:
-    cols = st.columns([0.3, 0.3, 0.4])
-    with cols[0]:
+    add_row_cols = st.columns([0.3, 0.3, 0.4])
+    with add_row_cols[0]:
         st.text_input("", placeholder="Ticker", key="add_ticker", max_chars=10)
-    with cols[1]:
-        # on_change triggers when Enter pressed in this field
+    with add_row_cols[1]:
         st.text_input("", placeholder="Množstvo", key="add_qty", max_chars=10, on_change=handle_add)
-    with cols[2]:
-        st.write("")  # empty - no button
+    with add_row_cols[2]:
+        st.write("")  # empty space
 
-# show messages if any
-if st.session_state.add_error:
-    st.error(st.session_state.add_error)
-if st.session_state.add_success:
-    st.success(st.session_state.add_success)
-    # reset success message after showing once
-    st.session_state.add_success = ""
+    # messages
+    if st.session_state.add_error:
+        st.error(st.session_state.add_error)
+    if st.session_state.add_success:
+        st.success(st.session_state.add_success)
+        st.session_state.add_success = ""
 
-# refresh metadata and auto-declare (kept)
+    # EDIT form: select a ticker and set new quantity (pressed Enter or Submit saves)
+    if len(st.session_state.holdings) > 0:
+        st.markdown("**Upraviť množstvo (vyber ticker)**")
+        edit_form = st.form("edit_qty_form")
+        tickers = [h["ticker"] for h in st.session_state.holdings]
+        sel = edit_form.selectbox("Ticker", options=tickers, key="edit_ticker_select")
+        # find current quantity
+        cur_qty = 0.0
+        for h in st.session_state.holdings:
+            if h["ticker"] == sel:
+                cur_qty = h.get("quantity", 0.0)
+                break
+        edit_qty_input = edit_form.text_input("Nové množstvo", value=str(cur_qty), key="edit_qty_text", placeholder="napr. 1.2")
+        edit_submitted = edit_form.form_submit_button("Uložiť")
+        if edit_submitted:
+            raw = edit_qty_input.strip()
+            try:
+                newq = float(raw.replace(',', '.'))
+                # update holding
+                for h in st.session_state.holdings:
+                    if h["ticker"] == sel:
+                        h["quantity"] = newq
+                        break
+                try:
+                    st.experimental_rerun()
+                except:
+                    pass
+            except:
+                st.error("Neplatné množstvo pre úpravu")
+
+with right_col:
+    st.write("")  # keep empty as requested
+
+# Refresh metadata for holdings (keeps auto-declare logic)
 today = datetime.now().date()
 for i,h in enumerate(st.session_state.holdings):
     try:
@@ -238,7 +264,7 @@ for i,h in enumerate(st.session_state.holdings):
         else:
             if exinfo:
                 st.session_state.holdings[i]["exDividendDate"] = exinfo
-        # infer next div simple
+        # infer simple next div
         try:
             divs = info.get("dividends_series")
             if divs is not None and len(divs) > 0:
@@ -254,41 +280,20 @@ for i,h in enumerate(st.session_state.holdings):
     except:
         pass
 
-# save quantities when edited inline
-def save_all():
-    for idx, hh in enumerate(st.session_state.holdings):
-        qk = f"qty_input_{idx}_{hh['ticker']}"
-        if qk in st.session_state:
-            raw = str(st.session_state[qk]).strip()
-            try:
-                val = float(raw.replace(',', '.'))
-                st.session_state.holdings[idx]["quantity"] = val
-            except:
-                # ignore invalid parse
-                pass
-
-# Render holdings compact table (Ticker, Meno, Akt.Cena, Mnozstvo editable)
-col_widths = [1,5,2,1]
-hdr = st.columns(col_widths)
-hdr[0].markdown("**Ticker**")
-hdr[1].markdown("**Meno**")
-hdr[2].markdown("**Akt.Cena**")
-hdr[3].markdown("**Množstvo**")
-
-for i,h in enumerate(st.session_state.holdings):
+# HOLDINGS - render compact HTML table (one row per ticker, no extra gaps)
+holdings_html = '<table class="compact-table"><tr><th>Ticker</th><th>Meno</th><th>Akt.Cena</th><th>Množstvo</th></tr>'
+for h in st.session_state.holdings:
     ticker = h["ticker"]
     name = h.get("name","")
     price = h.get("price")
     currency = h.get("currency","")
-    price_display = f"{price} {currency}" if price is not None else f"- {currency}"
-    cols = st.columns(col_widths)
-    cols[0].markdown(f"<div style='padding:6px 8px'>{ticker}</div>", unsafe_allow_html=True)
-    cols[1].markdown(f"<div style='padding:6px 8px'>{name}</div>", unsafe_allow_html=True)
-    cols[2].markdown(f"<div style='padding:6px 8px'>{price_display}</div>", unsafe_allow_html=True)
-    qkey = f"qty_input_{i}_{ticker}"
-    cols[3].text_input("", value=str(h.get("quantity",0)), key=qkey, on_change=save_all, max_chars=10)
+    price_disp = f"{price} {currency}" if price is not None else f"- {currency}"
+    qty_disp = f"{h.get('quantity',0)}"
+    holdings_html += f"<tr><td>{ticker}</td><td>{name}</td><td>{price_disp}</td><td>{qty_disp}</td></tr>"
+holdings_html += "</table>"
+st.markdown(holdings_html, unsafe_allow_html=True)
 
-# Ex-Dividend section (declared only, future ex dates)
+# Ex-Dividend table (unchanged behaviour)
 def parse_date_safe(s):
     try:
         return datetime.strptime(s, "%d/%m/%y")
@@ -300,10 +305,8 @@ for h in st.session_state.holdings:
     if not h.get("declared", False):
         continue
     ex_date = h.get("exDividendDate")
-    if not ex_date:
-        continue
-    if ex_date <= today:
-        continue
+    if not ex_date: continue
+    if ex_date <= today: continue
     qty = h.get("quantity", 0)
     price = h.get("price")
     currency = h.get("currency","")
@@ -357,4 +360,4 @@ else:
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-st.markdown('<div style="font-size:11px;color:#999">Poznámka: Zadaj ticker a množstvo a stlač Enter v poli Množstvo na pridanie. Ak ticker nie je rozpoznaný, zobrazí sa hlásenie "Unknown ticker".</div>', unsafe_allow_html=True)
+st.markdown('<div style="font-size:11px;color:#999">Poznámka: Držené akcie sú zobrazené kompaktne v tabuľke. Upraviť množstvo môžeš v ľavom bloku (vyber ticker a zadaj nové množstvo).</div>', unsafe_allow_html=True)
